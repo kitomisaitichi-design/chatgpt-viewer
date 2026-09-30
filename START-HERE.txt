@@ -1,0 +1,47 @@
+OFFLINE CHAT VIEWER v1.0.11
+
+1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
+   Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
+2. Double-click START-VIEWER.bat (Windows x64).
+3. Keep the console window open. Your default browser opens the reader.
+4. It scans the nearby folder first, then expands up to two parent levels.
+   Markdown titles appear directly from files, before full-text indexing.
+   Status and folder controls do not wait for the database.
+5. If needed: Export folders > Browse > choose your export folder > Scan & index.
+
+The selected chat has priority. Other chats are not loaded simultaneously.
+The sidebar appears five rows at a time; recent chats stay warm for quick returns.
+Startup downloads only five titles, prioritizing the remembered or linked chat.
+Remaining titles download in small batches independently of the active reader.
+Larger responses are compressed. A timed-out batch retries with five titles.
+Export folders reports available/indexed/expected counts and missing-file notes.
+
+Click chats to read. The latest five messages arrive first, then history fills
+to your page-size setting in small batches. Long messages load in fragments.
+Scroll up for earlier messages. At the bottom, Continue original chat opens ChatGPT.
+
+Ctrl+K: archive search. Ctrl+F: search in the current chat.
+Use the + button for categories; drag chats onto categories to organize them.
+Settings controls themes, colors, widths, text sizes, and reading positions.
+Saved JSON model metadata produces model badges. Saved alternatives produce version arrows.
+Tables have Fit/Wide, Compact, Collapse, Copy, and an expanded reading view.
+Messages, headings, code, and saved HTML details can collapse and expand.
+Python code keeps indentation and syntax colours; stdout remains monospaced.
+Exported url markers use readable labels and their saved target URLs.
+Equations render locally. Saved source URLs become clickable chips with mini icons.
+Formatting runs in a worker only near the viewport; folder controls stay responsive.
+
+No installation or internet is needed for the standard reader on Windows x64.
+Exact + typos search works immediately. Selecting Semantic in search automatically
+sets up the portable CPU engine/model in the background; progress is in Settings.
+First semantic setup needs internet. No separate Python installation or restart.
+Your original exports are never modified. Your uploaded chats are not bundled here.
+
+Full instructions: README.md. UI preview: docs/preview.png.
+
+UPDATING: Close the old console, replace the app folder contents, keep .viewer-data,
+and reopen START-VIEWER.bat. Browse to your exports to scan only that folder.
+Pause discovery and Stop current scan preserve already indexed chats.
+
+IF LOADING STALLS: Leave the viewer open, run CHECK-VIEWER.bat, and attach the
+VIEWER-DIAGNOSTICS.json file it creates here. It excludes chat text and tokens.

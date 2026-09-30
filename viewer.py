@@ -1,0 +1,1240 @@
+#!/usr/bin/env python3
+"""Offline Chat Viewer. Python 3.10+, no dependencies for standard operation."""
+import argparse, ast, gzip, hashlib, http.cookies, json, mimetypes, os, re, secrets, socket, sqlite3
+import sys, threading, time, urllib.parse, webbrowser, subprocess, queue, multiprocessing
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+APP = Path(__file__).resolve().parent
+# Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
+from setup_semantic import activate as activate_semantic
+activate_semantic()
+VERSION = '1.0.11'
+UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
+SKIP = {'.git','.svn','node_modules','__pycache__','.viewer-data','.venv','venv',
+        'Windows','Program Files','Program Files (x86)','$Recycle.Bin','System Volume Information',
+        'AppData','.cache','.npm','.local','exporter-source',
+        '.semantic-env','.semantic-packages','.semantic-staging','.semantic-cache','.semantic-old'}
+ROLE = re.compile(r'^## (You|User|Assistant|ChatGPT|Tool|System)(?: \(([^)]+)\))?\s*$')
+MODEL = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+STATIC_MIME = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8',
+ '.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json',
+ '.woff2':'font/woff2','.woff':'font/woff','.ttf':'font/ttf','.svg':'image/svg+xml',
+ '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.ico':'image/x-icon'}
+
+def static_mime(path):
+    # Do not consult Windows file associations for application assets.
+    suffix=Path(path).suffix.lower()
+    if suffix in STATIC_MIME:return STATIC_MIME[suffix]
+    return 'application/octet-stream'
+
+
+def epoch(x):
+    try:
+        n=float(x or 0); return n/1000 if n>1e12 else n
+    except (ValueError,TypeError):
+        try:
+            import datetime
+            return datetime.datetime.fromisoformat(str(x).replace('Z','+00:00')).timestamp()
+        except (ValueError,TypeError): return 0
+
+def content_text(content):
+    if isinstance(content,str): return content
+    if not isinstance(content,dict): return json.dumps(content,ensure_ascii=False) if content else ''
+    parts=content.get('parts')
+    if isinstance(parts,list):
+        return '\n\n'.join(p if isinstance(p,str) else p.get('text') or
+                           ('[Media reference: '+str(p['asset_pointer'])+']' if p.get('asset_pointer') else
+                            '```json\n'+json.dumps(p,ensure_ascii=False,indent=2)+'\n```') for p in parts if isinstance(p,(str,dict)))
+    return content.get('text') or json.dumps(content,ensure_ascii=False,indent=2)
+
+def active_nodes(data,leaf=None):
+    mapping=data.get('mapping') or {}; current=leaf or data.get('current_node')
+    if current not in mapping:
+        leaves=[k for k,v in mapping.items() if not v.get('children')]
+        current=max(leaves,key=lambda k:epoch((mapping[k].get('message') or {}).get('create_time')),default=None)
+    seen=set(); nodes=[]
+    while current in mapping and current not in seen:
+        seen.add(current); node=mapping[current];nodes.append(node);current=node.get('parent')
+    return nodes[::-1]
+
+def visible_role(node):
+    m=node.get('message') or {};role=(m.get('author') or {}).get('role');c=m.get('content') or {}
+    if (m.get('metadata') or {}).get('is_visually_hidden_from_conversation'):return None
+    if role=='user':return role
+    if role=='assistant' and m.get('channel') in (None,'final') and isinstance(c,dict) and c.get('content_type','text') in ('text','multimodal_text') and content_text(c).strip():return role
+    return None
+
+def graph_context(data):
+    from collections import defaultdict,deque
+    mp=data.get('mapping') or {};children=defaultdict(list)
+    for k,n in mp.items():
+        if n.get('parent') in mp:children[n['parent']].append(k)
+    cache={}
+    def versions(mid):
+        node=mp[mid];role=visible_role(node)
+        if role not in ('user','assistant'):return []
+        anchor=node.get('parent');seen={mid};highest=anchor
+        while anchor in mp and anchor not in seen:
+            seen.add(anchor);v=visible_role(mp[anchor])
+            if role=='assistant':
+                if v=='user':break
+                if v=='assistant':return []
+            elif v:break
+            highest=anchor;anchor=mp[anchor].get('parent')
+        if role=='user' and anchor not in mp:anchor=highest
+        if anchor not in mp:return []
+        key=(anchor,role)
+        if key not in cache:
+            queue=deque(children[anchor]);visited={anchor};found=[]
+            while queue:
+                cur=queue.popleft()
+                if cur in visited:continue
+                visited.add(cur);v=visible_role(mp[cur])
+                if v:
+                    if v==role:found.append(cur)
+                else:queue.extend(children[cur])
+            cache[key]=sorted(found,key=lambda k:epoch((mp[k].get('message') or {}).get('create_time')) or float('inf'))
+        return cache[key] if mid in cache[key] and len(cache[key])>1 else []
+    return mp,children,versions
+
+def receipt(metadata):
+    meta={k:v for k,v in metadata.items() if any(w in k.lower() for w in ('model_slug','effort','reasoning_start_time','reasoning_end_time'))}
+    served=meta.get('resolved_model_slug') or meta.get('model_slug')
+    picked=meta.get('default_model_slug')
+    # Conversation-wide default is not a historical per-turn selection receipt.
+    rerouted=bool(served and picked and not re.search(r'(^|[-_])auto($|[-_])',str(picked)) and served!=picked)
+    effort=next((v for k,v in meta.items() if 'effort' in k.lower()),None)
+    return dict(served=served,picked=picked,rerouted=rerouted,effort=effort,raw=meta)
+
+def source_identity(item):
+    return item.get('url') or item.get('file_id') or item.get('title') or ''
+
+def source_links(metadata):
+    """Keep saved URL and filename associations; never infer URLs from IDs."""
+    found={}
+    def refs(value):
+        if isinstance(value,str):return [value]
+        if isinstance(value,list):return [s for x in value for s in refs(x)]
+        if isinstance(value,dict):
+            out=[]
+            for key in ('ref','ref_id','reference_id','id','citation_id'):out+=refs(value.get(key))
+            # ChatGPT web-source pointers identify a turn plus a result slot.
+            if isinstance(value.get('turn_index'),int) and isinstance(value.get('ref_index'),int):
+                out.append('turn'+str(value['turn_index'])+str(value.get('ref_type') or ('file' if 'file' in str(value.get('type','')) else 'search'))+str(value['ref_index']))
+            return out
+        return []
+    def visit(value,inherited=(),depth=0):
+        if depth>12:return
+        if isinstance(value,list):
+            for item in value:visit(item,inherited,depth+1)
+        elif isinstance(value,dict):
+            own=[]
+            for key in ('ref','ref_id','reference_id','citation_id','citation_uuid','id','refs','citations','reference_ids'):own+=refs(value.get(key))
+            own=list(dict.fromkeys(own+list(inherited)+refs(value) if ('turn_index' in value or 'ref_index' in value) else own+list(inherited)))
+            url=next((value.get(k) for k in ('url','safe_url','source_url','href','link','cloud_doc_url') if isinstance(value.get(k),str) and value[k].startswith(('https://','http://'))),'')
+            is_file='file' in str(value.get('type') or value.get('ref_type') or '').lower() or value.get('category')=='files'
+            title=value.get('title') or value.get('name') or value.get('filename') or value.get('file_name')
+            if url or is_file and title:
+                item=dict(title=str(title or value.get('attribution') or urllib.parse.urlsplit(url).hostname or 'Source'))
+                if url:item['url']=url
+                if is_file:
+                    item['kind']='file'
+                    fid=value.get('file_id') or value.get('id')
+                    if isinstance(fid,str) and fid.startswith('file_'):item['file_id']=fid
+                icon=value.get('favicon_path') or value.get('icon_path')
+                if isinstance(icon,str) and not urllib.parse.urlsplit(icon).scheme:item['icon']=icon
+                for ref in own:
+                    bucket=found.setdefault(ref,[])
+                    if not any(source_identity(x)==source_identity(item) for x in bucket):bucket.append(item)
+            for key in ('items','sources','citations','references','content_references','source','data','source_links','webpages','grouped_webpages','conversation_context_citation_metadata','citation'):
+                if key in value:visit(value[key],own,depth+1)
+    visit(metadata)
+    return found
+
+def block_presentation(text,role='',content=None,message=None):
+    content=content if isinstance(content,dict) else {};message=message or {}
+    kind=content.get('content_type');language=content.get('language') or (message.get('metadata') or {}).get('language') or ''
+    recipient=message.get('recipient') or '';author=(message.get('author') or {}).get('name') or ''
+    if kind=='code':
+        return dict(kind='code',language=language or ('python' if 'python' in recipient else block_presentation(text,'assistant').get('language','plaintext')),origin='saved')
+    if kind=='execution_output' or role=='tool':
+        return dict(kind='output',language='plaintext',label='STDOUT/STDERR' if kind=='execution_output' or 'python' in author else 'Tool output',origin='saved')
+    # MD and older indexed rows may have lost the original code content type.
+    # Classify valid Python or explicit unfinished function/class declarations.
+    # Fence characters can occur inside Python string literals. Let the Python
+    # parser distinguish those from actual Markdown code fences; rejecting any
+    # occurrence loses code presentation for scripts that generate Markdown.
+    if role!='assistant' or len(text)>2000000:return {}
+    # Shell tool calls need not contain a heredoc (pipelines are common).
+    if re.match(r"^(?:bash|sh|zsh)\s+-(?:lc|c)\s+\S",text.lstrip()):
+        return dict(kind='code',language='bash',origin='inferred')
+    if text.lstrip().startswith(('{','[')):
+        try:
+            value=json.loads(text)
+            if isinstance(value,(dict,list)):
+                return dict(kind='code',language='json',origin='inferred')
+        except (ValueError,MemoryError,RecursionError):pass
+    candidate=re.sub(r'^python(?:3)?\s+-c\s+', '', text.lstrip(),count=1)
+    if not re.search(r'(?m)^(?:import |from |(?:async )?def |class |for |while |with |if |try:|print\(|[a-zA-Z_]\w*\s*=)',candidate):return {}
+    try:
+        tree=ast.parse(candidate)
+    except SyntaxError:
+        if re.match(r'^#{1,6}\s+[^\n]+\n\s*\n',candidate):return {}
+        # Exported code can end mid-expression. An explicit function/class
+        # declaration still identifies it; retain exactly the saved text.
+        first=next((line.strip() for line in candidate.splitlines() if line.strip() and not line.lstrip().startswith('#')),'')
+        if re.match(r'^(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(|^class\s+[A-Za-z_]\w*(?:\s*\(|\s*:)',first):
+            return dict(kind='code',language='python',origin='inferred')
+        return {}
+    except (ValueError,MemoryError,RecursionError):return {}
+    structured=(ast.Import,ast.ImportFrom,ast.Assign,ast.AnnAssign,ast.AugAssign,ast.For,ast.While,ast.With,ast.FunctionDef,ast.ClassDef,ast.If,ast.Try)
+    if any(isinstance(n,structured) or isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) for n in tree.body):
+        return dict(kind='code',language='python',origin='inferred')
+    return {}
+
+def presented_message(message):
+    extras=dict(message.get('extras') or {})
+    if not extras.get('presentation'):
+        presentation=block_presentation(message['text'],message.get('role',''))
+        if presentation:extras['presentation']=presentation
+    return dict(message,extras=extras)
+
+def surface_signal(data,models=True):
+    """Return positive product evidence; project membership is independent."""
+    if not isinstance(data,dict):return None
+    meta=data.get('metadata') if isinstance(data.get('metadata'),dict) else {}
+    for source in (data,meta):
+        for key in ('chat_kind','chatKind','surface','product','conversation_mode','conversation_origin','client','source'):
+            value=source.get(key)
+            if isinstance(value,dict):value=value.get('kind') or value.get('type') or value.get('name')
+            if not isinstance(value,str):continue
+            value=value.strip().lower()
+            if re.search(r'\bcodex\b',value):return ('codex','Saved '+key+': '+value)
+            if re.search(r'\bwork\b|\bworkmode\b',value):return ('work','Saved '+key+': '+value)
+    if models:
+        for source in (data,meta):
+            for key in ('default_model_slug','model_slug','resolved_model_slug'):
+                value=source.get(key)
+                if isinstance(value,str) and re.search(r'-wm(?:$|[-_])',value.lower()):
+                    return ('work','Inferred from saved Work model marker: '+value)
+    return None
+
+def source_surface_hint(path):
+    # Old caches omitted top-level product/model fields. Recover bounded header
+    # metadata in the background instead of reparsing every message.
+    path=Path(path)
+    if path.suffix.lower()!='.json':return None
+    try:
+        with path.open(encoding='utf-8-sig',errors='replace') as stream:head=stream.read(16384)
+    except OSError:return None
+    if not head.lstrip().startswith('{'):return None
+    head=re.split(r'"(?:mapping|messages|chatlog)"\s*:',head,maxsplit=1)[0]
+    metadata={}
+    for key,value in re.findall(r'"(chat_kind|chatKind|surface|product|conversation_mode|conversation_origin|default_model_slug)"\s*:\s*("(?:[^"\\]|\\.)*")',head):
+        try:metadata[key]=json.loads(value)
+        except ValueError:pass
+    return surface_signal(metadata)
+
+def canonical_kind(value):
+    value=str(value or '').lower()
+    return 'codex' if re.search(r'\bcodex\b',value) else 'work' if re.search(r'\bwork\b|\bworkmode\b',value) else 'chat'
+
+def parse_json(data,path,leaf=None):
+    if not isinstance(data,dict): return None
+    if isinstance(data.get('conversation'),dict): data=data['conversation']
+    messages=[]
+    if isinstance(data.get('mapping'),dict):
+        mp,children,versions=graph_context(data);node_ids={id(n):k for k,n in mp.items()}
+        for node in active_nodes(data,leaf):
+            m=node.get('message') or {}; role=(m.get('author') or {}).get('role','')
+            if not role or (m.get('metadata') or {}).get('is_visually_hidden_from_conversation'): continue
+            c=m.get('content') or {}; channel=m.get('channel') or ''
+            text=content_text(c); attachments=(m.get('metadata') or {}).get('attachments') or []
+            if attachments: text+='\n\n'+'\n'.join('Attachment reference: '+str(a.get('name') or a.get('filename') or a.get('id') or a.get('file_id')) for a in attachments)
+            visible=role in ('user','assistant') and channel not in ('analysis','justify','confidence') and c.get('content_type') not in ('thoughts','reasoning_recap','execution_output')
+            if not text.strip(): continue
+            mid=node.get('id') or node_ids.get(id(node),'')
+            extra={'node_id':mid,'receipt':receipt(m.get('metadata') or {}),'versions':versions(mid) if mid else [],'sources':source_links(m.get('metadata') or {}),'presentation':block_presentation(text,role,c,m)}
+            messages.append(dict(role=role,channel=channel,text=text,time=epoch(m.get('create_time')),visible=int(visible),extras=extra))
+    elif isinstance(data.get('messages'),list):
+        for m in data['messages']:
+            if not isinstance(m,dict): continue
+            role=m.get('role') or (m.get('author') or {}).get('role','assistant')
+            text=content_text(m.get('content') or m.get('text') or '')
+            if text.strip(): messages.append(dict(role=role,channel=m.get('channel',''),text=text,time=epoch(m.get('create_time')),visible=int(role in ('user','assistant')),extras={'sources':source_links(m.get('metadata') or m),'presentation':block_presentation(text,role,m.get('content'),m)}))
+    else: return None
+    cid=str(data.get('conversation_id') or data.get('id') or infer_id(path))
+    signal=surface_signal(data)
+    if not signal:
+        for m in messages:
+            saved_receipt=(m.get('extras') or {}).get('receipt') or {}
+            signal=surface_signal({'model_slug':saved_receipt.get('served') or saved_receipt.get('picked')})
+            if signal:break
+    kind,evidence=signal or ('chat','No saved Work/Codex product marker')
+    return dict(id=cid,title=data.get('title') or path.stem,created=epoch(data.get('create_time')),updated=epoch(data.get('update_time')),kind=kind,kind_evidence=evidence,project=data.get('project') or '',url=data.get('url') or ('' if cid.startswith('local-') else 'https://chatgpt.com/c/'+urllib.parse.quote(cid)),messages=messages)
+
+def infer_id(path):
+    m=re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',path.stem,re.I)
+    return m.group(1) if m else 'local-'+hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:24]
+
+def parse_md(text,path):
+    lines=text.splitlines(); messages=[]; body=[]; current=None; fence=None
+    for line in lines:
+        fm=re.match(r'^\s*(`{3,}|~{3,})',line)
+        if fm:
+            char=fm.group(1)[0]; length=len(fm.group(1))
+            if fence is None: fence=(char,length)
+            elif char==fence[0] and length>=fence[1]: fence=None
+        m=ROLE.match(line) if fence is None else None
+        if m:
+            if current: current['text']='\n'.join(body).strip(); messages.append(current)
+            role={'You':'user','User':'user','Assistant':'assistant','ChatGPT':'assistant','Tool':'tool','System':'system'}[m[1]]
+            channel=m[2] or '';current=dict(role=role,channel=channel,time=0,visible=int(role in ('user','assistant') and channel!='analysis'));body=[]
+        elif current: body.append(line)
+    if current: current['text']='\n'.join(body).strip();messages.append(current)
+    if not messages: return None
+    for m in messages:
+        presentation=block_presentation(m['text'],m['role'])
+        if presentation:m.setdefault('extras',{})['presentation']=presentation
+        if m['text'].startswith('{"content_type":"thoughts"'): m['visible']=0
+    heading=next((l[2:] for l in lines[:15] if l.startswith('# ')),path.stem)
+    link=re.search(r'^Conversation:\s*(https?://\S+)',text[:4000],re.M)
+    url=link[1] if link else '';
+    if not url and not infer_id(path).startswith('local-'):url='https://chatgpt.com/c/'+infer_id(path)
+    match=re.search(r'/c/([\w-]+)',url)
+    return dict(id=match[1] if match else infer_id(path),title=heading,created=0,updated=path.stat().st_mtime,kind='chat',project='',url=url,messages=messages)
+
+class Archive:
+    def __init__(self,data_dir,background_process=True,initialize=True):
+        self.data_dir=Path(data_dir);self.data_dir.mkdir(parents=True,exist_ok=True)
+        self.dbpath=self.data_dir/'archive.sqlite3';self.lock=threading.RLock(); self.scan_lock=threading.Lock()
+        self.branch_cache={};self.revision=0;self.cancel_event=threading.Event();self.request_lock=threading.Lock()
+        self.background_process=background_process;self.worker=None;self.reader_pool=None;self.reader_future=None;self.source_link_cache={}
+        self.mp=multiprocessing.get_context('spawn');self.foreground=self.mp.Event();self.foreground_count=0;self.foreground_lock=threading.Lock()
+        self.status=dict(scanning=False,phase='Ready',files=0,indexed=0,errors=[],roots=[])
+        self.ui_cache=None;self.ui_cache_lock=threading.Lock();self.live_sources={};self.cache_stop=threading.Event();self.cache_thread=None
+        self.semantic_lock=threading.Lock(); self.semantic_model=None; self.semantic_state={'ready':False,'building':False,'count':0,'error':''}
+        if not initialize:return
+        with self.connect() as db:
+            db.execute('PRAGMA journal_mode=WAL')
+            db.executescript('''
+            CREATE TABLE IF NOT EXISTS chats(id TEXT PRIMARY KEY,title TEXT,url TEXT,created REAL,updated REAL,kind TEXT,project TEXT,path TEXT,fingerprint TEXT,count INTEGER,folder TEXT);
+            CREATE TABLE IF NOT EXISTS messages(cid TEXT,seq INTEGER,role TEXT,channel TEXT,text TEXT,time REAL,visible INTEGER,PRIMARY KEY(cid,seq));
+            CREATE INDEX IF NOT EXISTS msg_visible ON messages(cid,visible,seq);
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(cid UNINDEXED,seq UNINDEXED,title,text,tokenize='porter unicode61',prefix='2 3 4');
+            CREATE VIRTUAL TABLE IF NOT EXISTS titles USING fts5(cid UNINDEXED,title,tokenize='porter unicode61',prefix='2 3 4');
+            CREATE VIRTUAL TABLE IF NOT EXISTS phrase_vocabulary USING fts5vocab(chunks,'row');
+            CREATE TABLE IF NOT EXISTS organization(cid TEXT PRIMARY KEY,category TEXT DEFAULT '',pinned INTEGER DEFAULT 0,position REAL DEFAULT 0,alias TEXT DEFAULT '');
+            CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
+            CREATE TABLE IF NOT EXISTS chunk_rows(cid TEXT,rowid INTEGER,PRIMARY KEY(cid,rowid));
+            CREATE TABLE IF NOT EXISTS title_rows(cid TEXT PRIMARY KEY,rowid INTEGER);
+            CREATE TABLE IF NOT EXISTS manifest_entries(cid TEXT,manifest TEXT,metadata TEXT,path TEXT,available INTEGER,PRIMARY KEY(cid,manifest));
+            CREATE TABLE IF NOT EXISTS scanned_files(path TEXT PRIMARY KEY,fingerprint TEXT,status TEXT);
+            CREATE TABLE IF NOT EXISTS vectors(cid TEXT,seq INTEGER,part INTEGER,hash TEXT,vector BLOB,PRIMARY KEY(cid,seq,part));
+            ''')
+            columns={r['name'] for r in db.execute('PRAGMA table_info(messages)')}
+            if 'extras' not in columns:db.execute("ALTER TABLE messages ADD COLUMN extras TEXT DEFAULT '{}'")
+            if 'kind_evidence' not in {r['name'] for r in db.execute('PRAGMA table_info(chats)')}:
+                db.execute("ALTER TABLE chats ADD COLUMN kind_evidence TEXT DEFAULT ''")
+            db.execute("UPDATE chats SET kind='chat' WHERE kind NOT IN ('chat','work','codex') AND lower(kind) NOT LIKE '%work%' AND lower(kind) NOT LIKE '%codex%'")
+            db.execute("UPDATE chats SET kind='work' WHERE lower(kind) LIKE '%work%'")
+            db.execute("UPDATE chats SET kind='codex' WHERE lower(kind) LIKE '%codex%'")
+    @contextmanager
+    def connect(self):
+        # WAL is configured once at initialization. Reader connections never try to
+        # change journal mode while the indexing worker owns a write transaction.
+        db=sqlite3.connect(self.dbpath,timeout=5);db.row_factory=sqlite3.Row
+        try:
+            with db:yield db
+        finally:db.close()
+    def enable_ui_cache(self):
+        # The HTTP status path must never wait on filesystem/database activity.
+        self.ui_cache={'chats':{},'settings':self.settings(),'coverage':dict(expected=0,indexed=0,available=0,missing=0,examples=[]),'revision':0,'loading':True}
+        def load_existing():
+            try:
+                chats=self.catalog();coverage=self.coverage()
+                with self.ui_cache_lock:
+                    for c in chats:
+                        if c['id'] not in self.ui_cache['chats']:self.ui_cache['chats'][c['id']]=c
+                    self.ui_cache['coverage']=coverage;self.ui_cache['loading']=False;self.ui_cache['revision']+=1
+                self.repair_cached_types()
+            except Exception as e:
+                self.status.setdefault('errors',[]).append('Cached archive read: '+str(e))
+                self.ui_cache['loading']=False
+        self.cache_thread=threading.Thread(target=load_existing,daemon=True);self.cache_thread.start()
+    def repair_cached_types(self):
+        # Read saved receipt metadata only, never reparse all conversation bodies.
+        signals={}
+        with self.connect() as db:
+            for row in db.execute("SELECT cid,extras FROM messages WHERE role='assistant' AND extras LIKE '%-wm%'"):
+                if self.cache_stop.is_set():return
+                if row['cid'] in signals:continue
+                receipt=(json.loads(row['extras']) or {}).get('receipt') or {}
+                signal=surface_signal({'model_slug':receipt.get('served') or receipt.get('picked')})
+                if signal:signals[row['cid']]=signal
+            for row in db.execute('SELECT cid,metadata FROM manifest_entries'):
+                signal=surface_signal(json.loads(row['metadata']),models=False)
+                if signal:signals[row['cid']]=signal
+            cached=[dict(row) for row in db.execute("SELECT id,kind,path FROM chats WHERE kind!='codex'")]
+        for row in cached:
+            if self.cache_stop.is_set():return
+            if row['id'] not in signals:
+                signal=source_surface_hint(row['path'])
+                if signal:signals[row['id']]=signal
+            self.yield_background()
+        changed=False
+        with self.lock,self.connect() as db:
+            for cid,(kind,evidence) in signals.items():
+                before=db.total_changes
+                db.execute("UPDATE chats SET kind=?,kind_evidence=? WHERE id=? AND kind!='codex' AND (kind!=? OR kind_evidence!=?)",(kind,evidence,cid,kind,evidence))
+                changed|=db.total_changes>before
+        if changed:self.revision+=1
+        if self.ui_cache is not None:
+            with self.ui_cache_lock:
+                for cid,(kind,evidence) in signals.items():
+                    c=self.ui_cache['chats'].get(cid)
+                    if c and c['kind']!='codex' and (c['kind']!=kind or c.get('kind_evidence')!=evidence):
+                        c.update(kind=kind,kind_evidence=evidence);self.ui_cache['revision']+=1
+
+    def announce_source(self,f,root):
+        if f.suffix.lower()!='.md':return
+        with f.open(encoding='utf-8-sig',errors='replace') as file:head=file.read(8192)
+        parsed=parse_md(head,f)
+        if not parsed:return
+        c={k:v for k,v in parsed.items() if k!='messages'}
+        stat=f.stat();c.update(path=str(f),fingerprint=str(stat.st_mtime_ns)+':'+str(stat.st_size),count=0,folder=str(f.parent.relative_to(root)),loaded=False)
+        self.live_sources[c['id']]=c
+    def publish_sources(self,sources,coverage=None):
+        if self.ui_cache is None:return
+        with self.ui_cache_lock:
+            changed=False
+            for c in sources:
+                old=self.ui_cache['chats'].get(c['id'],{})
+                if old.get('loaded') and old.get('path','').lower().endswith('.json') and c.get('path','').lower().endswith('.md'):continue
+                merged={**dict(category='',pinned=0,position=0,alias=''),**old,**c}
+                if old.get('loaded') and not c.get('loaded') and old.get('path')==c.get('path') and old.get('fingerprint')==c.get('fingerprint'):
+                    merged.update(loaded=True,count=old.get('count',0))
+                if merged!=old:self.ui_cache['chats'][c['id']]=merged;changed=True
+            if coverage is not None and coverage!=self.ui_cache['coverage']:self.ui_cache['coverage']=coverage;changed=True
+            if changed:self.ui_cache['revision']+=1
+    def save_settings_later(self,values):
+        if self.ui_cache is not None:
+            with self.ui_cache_lock:self.ui_cache['settings'].update(values)
+        def persist():
+            try:self.save_settings(values)
+            except Exception as e:self.status.setdefault('errors',[]).append('Saving settings: '+str(e))
+        threading.Thread(target=persist,daemon=True).start()
+    def foreground_page(self,cid,*args):
+        if self.ui_cache is not None:
+            with self.ui_cache_lock:c=self.ui_cache['chats'].get(cid)
+            if c and Path(c['path']).is_file() and Path(c['path']).suffix.lower() in ('.md','.json'):
+                stat=Path(c['path']).stat()
+                if c.get('loaded') and c.get('fingerprint')==str(stat.st_mtime_ns)+':'+str(stat.st_size):return self.page(cid,*args)
+                return self.read_source_page(cid,c['path'],*args)
+        return self.page(cid,*args)
+    def read_source_page(self,cid,path,*args):
+        if self.reader_pool is None:
+            with self.foreground_lock:
+                if self.reader_pool is None:self.reader_pool=ThreadPoolExecutor(max_workers=2,thread_name_prefix='SelectedChatReader')
+        with self.foreground_lock:
+            if self.reader_future and not self.reader_future.running():self.reader_future.cancel()
+            future=self.reader_pool.submit(source_page,cid,path,*args);self.reader_future=future
+        return future.result(timeout=60)
+    def linked_sources(self,cid,requested,seq=None,node_id=None):
+        d,path=self.source_data(cid)
+        if not path:return {}
+        exact={}
+        if node_id and node_id in (d.get('mapping') or {}):exact=source_links(((d['mapping'][node_id].get('message') or {}).get('metadata') or {}))
+        elif seq is not None and isinstance(d.get('messages'),list) and 0<=int(seq)<len(d['messages']):
+            message=d['messages'][int(seq)];exact=source_links(message.get('metadata') or message)
+        key=(cid,str(path),path.stat().st_mtime_ns)
+        if key not in self.source_link_cache:
+            links={}
+            for node in (d.get('mapping') or {}).values():
+                for ref,items in source_links((node.get('message') or {}).get('metadata') or {}).items():
+                    bucket=links.setdefault(ref,[])
+                    for item in items:
+                        if not any(source_identity(x)==source_identity(item) for x in bucket):bucket.append(item)
+            for message in d.get('messages') or []:
+                for ref,items in source_links(message.get('metadata') or message).items():
+                    bucket=links.setdefault(ref,[])
+                    for item in items:
+                        if not any(source_identity(x)==source_identity(item) for x in bucket):bucket.append(item)
+            self.source_link_cache={key:links}
+        links=self.source_link_cache[key]
+        return {ref:exact.get(ref) or links[ref] for ref in requested[:100] if ref in exact or ref in links and len(links[ref])==1}
+    def message_fragment(self,cid,seq,offset=0,leaf=None):
+        seq=int(seq);offset=max(0,int(offset))
+        if leaf:
+            page=self.branch_page(cid,leaf,None,seq,20,True)
+            row=next((m for m in page['messages'] if m['seq']==seq),None)
+        else:
+            page=self.foreground_page(cid,None,seq,20,True)
+            row=next((m for m in page['messages'] if m['seq']==seq),None)
+        if not row:raise ValueError('Saved message not found.')
+        text=row['text'];part=bounded_text(text[offset:],24576);end=offset+len(part)
+        return dict(text=part,next_offset=end,complete=end>=len(text),length=len(text))
+    def catalog_batch(self,offset=0,limit=25,priority=''):
+        offset=max(0,int(offset));limit=max(1,min(int(limit),25))
+        if self.ui_cache is not None:
+            with self.ui_cache_lock:
+                rows=list(self.ui_cache['chats'].values());revision=self.ui_cache['revision']
+        else:rows=self.catalog();revision=self.revision
+        # Cache insertion order only grows. Updates keep their original slots,
+        # so discovery can continue while offset-based batches are downloaded.
+        if priority:
+            chosen=next((c for c in rows if c['id']==priority),None)
+            if chosen:rows=[chosen]+[c for c in rows if c['id']!=priority]
+            else:priority=''
+        batch=[];size=0
+        for c in rows[offset:offset+limit]:
+            n=len(json.dumps(c,ensure_ascii=False,separators=(',',':')).encode())
+            if batch and size+n>16*1024:break
+            batch.append(c);size+=n
+        next_offset=offset+len(batch)
+        return dict(chats=batch,revision=revision,offset=offset,nextOffset=next_offset if next_offset<len(rows) else None,total=len(rows),priority=priority)
+    def state(self,since=None,limit=None,priority=''):
+        if self.ui_cache is not None:
+            with self.ui_cache_lock:
+                cache=self.ui_cache;revision=cache['revision'];chats=list(cache['chats'].values()) if since is None or str(revision)!=str(since) else None
+                coverage=dict(cache['coverage']);coverage['available']=max(coverage['available'],len(cache['chats']));coverage['indexed']=sum(bool(c.get('loaded')) for c in cache['chats'].values())
+                result=dict(chats=chats,revision=revision,coverage=coverage,settings=dict(cache['settings']),scan=dict(self.status),semantic=dict(self.semantic_state),cacheLoading=cache['loading'])
+        else:
+            revision=self.revision
+            result=dict(chats=self.catalog() if since is None or str(revision)!=str(since) else None,
+                        revision=revision,coverage=self.coverage(),settings=self.settings(),scan=dict(self.status),semantic=dict(self.semantic_state))
+        if limit is not None and result['chats'] is not None:
+            page=self.catalog_batch(0,limit,priority or result['settings'].get('lastChat',''))
+            result['chats']=page.pop('chats');result['catalog']=page;result['revision']=page['revision']
+        if limit is not None and since is not None:
+            # Reading positions/organization can be large. Polls only need scan settings.
+            result['settings']={k:result['settings'][k] for k in ('scan_start','scan_up','scanPaused') if k in result['settings']}
+        return result
+    def request_scan(self,start,up=2):
+        # A new request cancels the old producer and queued work, rather than being dropped.
+        with self.request_lock:
+            self.cancel_event.set();event=threading.Event();self.cancel_event=event
+            self.save_settings_later({'scan_start':str(Path(start).expanduser().resolve()),'scan_up':int(up),'scanPaused':False}) if self.ui_cache is not None else self.save_settings({'scan_start':str(Path(start).expanduser().resolve()),'scan_up':int(up),'scanPaused':False})
+            self.status.update(scanning=True,phase='Starting background discovery')
+            threading.Thread(target=self.process_scan if self.background_process else self.scan,args=(start,up,event),daemon=True).start()
+    def process_scan(self,start,up,event):
+        with self.scan_lock:
+            if event.is_set():return
+            updates=self.mp.Queue(maxsize=4);cancel=self.mp.Event()
+            worker=self.mp.Process(target=scan_worker,args=(str(self.data_dir),str(start),up,updates,cancel,self.foreground),daemon=True)
+            self.worker=worker;last_revision=0
+            try:
+                worker.start()
+                while worker.is_alive():
+                    if event.is_set():
+                        cancel.set();worker.join(timeout=.3)
+                        if worker.is_alive():worker.terminate()
+                        worker.join(timeout=2);break
+                    try:
+                        status,revision,sources,coverage=updates.get(timeout=.1)
+                        self.publish_sources(sources,coverage)
+                        self.status=status
+                        if revision!=last_revision:self.revision+=1;last_revision=revision;self.semantic_state['ready']=False
+                    except queue.Empty:pass
+                if not event.is_set():
+                    while True:
+                        try:
+                            status,revision,sources,coverage=updates.get_nowait();self.status=status;self.publish_sources(sources,coverage)
+                            if revision!=last_revision:self.revision+=1;last_revision=revision;self.semantic_state['ready']=False
+                        except queue.Empty:break
+                    if worker.exitcode not in (None,0):self.status.update(phase='Background scan failed · see console',scanning=False)
+                else:self.status.update(phase='Scan stopped · cached chats remain available',scanning=False)
+            except Exception as e:self.status.update(phase='Background scan failed',scanning=False,errors=[str(e)])
+            finally:
+                self.status['scanning']=False;self.worker=None;updates.close()
+    @contextmanager
+    def foreground_read(self):
+        with self.foreground_lock:self.foreground_count+=1;self.foreground.set()
+        try:yield
+        finally:
+            with self.foreground_lock:
+                self.foreground_count-=1
+                if not self.foreground_count:self.foreground.clear()
+    def yield_background(self):
+        while self.foreground.is_set() and not self.cancel_event.is_set():time.sleep(.01)
+    def close(self):
+        self.cancel_event.set();self.cache_stop.set()
+        if self.worker and self.worker.is_alive():self.worker.terminate();self.worker.join(timeout=2)
+        if self.reader_pool:self.reader_pool.shutdown(wait=False,cancel_futures=True)
+        if self.cache_thread and self.cache_thread.is_alive():self.cache_thread.join(timeout=5)
+    def stop_scan(self):
+        self.cancel_event.set();self.save_settings_later({'scanPaused':True}) if self.ui_cache is not None else self.save_settings({'scanPaused':True})
+        if self.status.get('scanning'):self.status['phase']='Stopping background scan'
+    def settings(self):
+        with self.connect() as db:return {r['key']:json.loads(r['value']) for r in db.execute('SELECT * FROM settings')}
+    def save_settings(self,values):
+        if self.ui_cache is not None:
+            with self.ui_cache_lock:self.ui_cache['settings'].update(values)
+        with self.lock,self.connect() as db:
+            for k,v in values.items():db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(k,json.dumps(v)))
+    def catalog(self):
+        with self.connect() as db:
+            ready=[dict(dict(r),loaded=True) for r in db.execute("SELECT c.*,COALESCE(o.category,'') category,COALESCE(o.pinned,0) pinned,COALESCE(o.position,0) position,COALESCE(o.alias,'') alias FROM chats c LEFT JOIN organization o ON c.id=o.cid")]
+            ids={r['id'] for r in ready};organization={r['cid']:dict(r) for r in db.execute('SELECT * FROM organization')}
+            for r in db.execute('SELECT * FROM manifest_entries WHERE available=1'):
+                if r['cid'] in ids:continue
+                m=json.loads(r['metadata']);ids.add(r['cid'])
+                ready.append(dict(id=r['cid'],title=m.get('title') or Path(r['path']).stem,url=m.get('url') or 'https://chatgpt.com/c/'+r['cid'],
+                    created=epoch(m.get('create_time')),updated=epoch(m.get('update_time')),kind=(surface_signal(m) or (canonical_kind(m.get('chat_kind') or m.get('chatKind')),))[0],
+                    project=m.get('project') if isinstance(m.get('project'),str) else '',path=r['path'],fingerprint='',count=0,folder=str(Path(r['path']).parent),
+                    category='',pinned=0,position=0,alias='',loaded=False))
+                ready[-1].update({k:organization.get(r['cid'],{}).get(k,ready[-1][k]) for k in ('category','pinned','position','alias')})
+            return ready
+    def coverage(self):
+        with self.connect() as db:
+            expected={r[0] for r in db.execute('SELECT DISTINCT cid FROM manifest_entries')}
+            ready={r[0] for r in db.execute('SELECT id FROM chats')}
+            available={r[0] for r in db.execute('SELECT DISTINCT cid FROM manifest_entries WHERE available=1')}
+            missing=expected-ready-available
+            examples=[dict(id=r['cid'],title=json.loads(r['metadata']).get('title') or r['cid']) for r in db.execute('SELECT cid,metadata FROM manifest_entries') if r['cid'] in missing][:8]
+            return dict(expected=len(expected),indexed=len(ready),available=len(ready|available),missing=len(missing),examples=examples)
+    def register_manifest(self,entry,manifest,root):
+        cid=entry['id'];path='';available=False
+        for key in ('json','markdown'):
+            value=entry.get(key)
+            if isinstance(value,str) and value:
+                candidate=(manifest.parent/value).resolve()
+                if candidate.is_relative_to(root) and candidate.is_file():path=str(candidate);available=True;break
+        metadata=json.dumps(entry,ensure_ascii=False)
+        with self.lock,self.connect() as db:
+            old=db.execute('SELECT metadata,path,available FROM manifest_entries WHERE cid=? AND manifest=?',(cid,str(manifest))).fetchone()
+            if old and tuple(old)==(metadata,path,int(available)):return
+            db.execute('INSERT OR REPLACE INTO manifest_entries VALUES(?,?,?,?,?)',(cid,str(manifest),metadata,path,int(available)))
+        self.revision+=1
+        if available:
+            self.live_sources[cid]=dict(id=cid,title=entry.get('title') or Path(path).stem,url=entry.get('url') or 'https://chatgpt.com/c/'+cid,created=epoch(entry.get('create_time')),updated=epoch(entry.get('update_time')),kind=(surface_signal(entry) or (canonical_kind(entry.get('chat_kind') or entry.get('chatKind')),))[0],project=entry.get('project') if isinstance(entry.get('project'),str) else '',path=path,fingerprint='',count=0,folder=str(Path(path).parent.relative_to(root)),loaded=False)
+
+    def organize(self,cid,values):
+        with self.lock,self.connect() as db:
+            db.execute('INSERT OR IGNORE INTO organization(cid) VALUES(?)',(cid,))
+            for k in ('category','pinned','position','alias'):
+                if k in values:db.execute('UPDATE organization SET '+k+'=? WHERE cid=?',(values[k],cid))
+        self.revision+=1
+        if self.ui_cache is not None:
+            with self.ui_cache_lock:
+                if cid in self.ui_cache['chats']:self.ui_cache['chats'][cid].update(values)
+                self.ui_cache['revision']+=1
+    def discover_paths(self,start,root,event):
+        """Near folders first; yield each candidate without collecting the whole tree."""
+        stages=[start];current=start
+        while current!=root:
+            current=current.parent;stages.append(current)
+        visited=set();candidates=0;directories=0
+        def note(error):
+            if len(self.status['errors'])<40:self.status['errors'].append(str(error))
+        for stage in stages:
+            for base,dirs,files in os.walk(stage,followlinks=False,onerror=note):
+                if event.is_set():return
+                basepath=Path(base);key=str(basepath.resolve())
+                if key in visited:dirs.clear();continue
+                visited.add(key);directories+=1
+                self.status['directories']=directories;self.status['current_folder']=str(basepath)
+                if directories>25000:
+                    note('Directory limit reached. Choose a narrower export folder.');return
+                depth=len(basepath.relative_to(root).parts)
+                dirs[:]=[d for d in dirs if d not in SKIP and not d.startswith('.') and
+                         not (basepath/d).is_symlink() and str((basepath/d).resolve()) not in visited and
+                         (basepath/d).resolve() not in (APP/'web',APP/'tests',APP/'runtime',APP/'models')]
+                dirs.sort(key=lambda d:(not any(w in d.lower() for w in ('export','backup','chat','markdown','json')),d.lower()))
+                if depth>=24:
+                    dirs.clear();note('Depth limit reached at '+str(basepath))
+                def priority(name):
+                    lower=name.lower()
+                    return (0 if lower=='conversation-index.json' or 'portable-state' in lower else 1 if lower.endswith('.json') else 2,lower)
+                for name in sorted(files,key=priority):
+                    if event.is_set():return
+                    f=basepath/name
+                    if f.suffix.lower() not in ('.md','.json','.jsonl') or f.is_symlink():continue
+                    candidates+=1;self.status['files']=candidates
+                    if candidates>100000:
+                        note('File limit reached. Choose a narrower export folder.');return
+                    yield f
+                # Give foreground HTTP handlers a turn even in directories with no chats.
+                time.sleep(.002)
+    def read_items(self,f):
+        if f.suffix.lower()=='.md':
+            parsed=parse_md(f.read_text(encoding='utf-8-sig',errors='replace'),f)
+            if parsed:yield parsed
+            return
+        if f.suffix.lower()=='.jsonl':
+            rows=[json.loads(line) for line in f.read_text(encoding='utf-8-sig').splitlines() if line.strip()]
+            conv={'id':infer_id(f),'title':f.stem,'product':'codex','messages':[]}
+            for r in rows:
+                if not isinstance(r,dict) or r.get('type') not in ('response_item','event_msg'):continue
+                payload=r.get('payload') or {};role=payload.get('role')
+                if role:conv['messages'].append({'role':role,'text':'\n'.join(x.get('text','') for x in payload.get('content',[]) if isinstance(x,dict))})
+            raw=[conv] if conv['messages'] else []
+        else:
+            d=json.loads(f.read_text(encoding='utf-8-sig'));raw=d if isinstance(d,list) else [d]
+        for d in raw:
+            self.yield_background()
+            x=parse_json(d,f)
+            if x:yield x
+    def scan(self,start,up=2,event=None):
+        if event is None:
+            self.cancel_event.set();self.cancel_event=threading.Event();event=self.cancel_event
+        with self.scan_lock:
+            if event.is_set():return
+            producer=None
+            try:
+                p=Path(start).expanduser().resolve()
+                if not p.is_dir():raise ValueError('Choose an existing folder.')
+                root=p
+                for _ in range(max(0,min(int(up),4))):
+                    if root.parent==root or root.parent.parent==root.parent:break
+                    root=root.parent
+                self.status=dict(scanning=True,phase='Discovering and indexing',files=0,indexed=0,processed=0,cached=0,
+                                 directories=0,current_folder=str(p),current_file='',errors=[],roots=[str(root)],started=time.time())
+                self.save_settings({'scan_start':str(p),'scan_up':int(up)})
+                jobs=queue.Queue(maxsize=100000);finished=object();metadata={};seen={}
+                def produce():
+                    try:
+                        for f in self.discover_paths(p,root,event):
+                            try:self.announce_source(f,root)
+                            except Exception as e:
+                                if len(self.status['errors'])<40:self.status['errors'].append(f.name+': header read: '+str(e))
+                            while not event.is_set():
+                                try:jobs.put(f,timeout=.1);break
+                                except queue.Full:pass
+                            if event.is_set():return
+                    except Exception as e:
+                        if len(self.status['errors'])<40:self.status['errors'].append(str(e))
+                    finally:
+                        while not event.is_set():
+                            try:jobs.put(finished,timeout=.1);break
+                            except queue.Full:pass
+                producer=threading.Thread(target=produce,daemon=True);producer.start()
+                while not event.is_set():
+                    self.yield_background()
+                    try:f=jobs.get(timeout=.1)
+                    except queue.Empty:continue
+                    if f is finished:break
+                    self.status['current_file']=str(f);self.status['phase']='Discovering / indexing '+f.name
+                    try:
+                        stat=f.stat()
+                        if stat.st_size>512*1024*1024:raise ValueError('File over 512 MiB; split the export first.')
+                        fp=str(stat.st_mtime_ns)+':'+str(stat.st_size);rank=(int(f.suffix.lower()=='.json'),stat.st_mtime_ns)
+                        ismeta=f.name.lower()=='conversation-index.json' or ('portable-state' in f.name.lower() and f.suffix.lower()=='.json')
+                        with self.connect() as db:
+                            cached=list(db.execute('SELECT id,fingerprint FROM chats WHERE path=?',(str(f),)))
+                            record=db.execute('SELECT fingerprint,status FROM scanned_files WHERE path=?',(str(f),)).fetchone()
+                        if not ismeta and record and record['fingerprint']==fp and record['status']=='indexed' and cached and all(r['fingerprint']==fp for r in cached):
+                            for r in cached:
+                                if r['id'] not in seen or rank>=seen[r['id']]:seen[r['id']]=rank;self.enrich(r['id'],metadata.get(r['id'],{}))
+                            self.status['cached']+=1
+                        elif not ismeta and record and record['fingerprint']==fp and record['status']=='ignored':
+                            self.status['cached']+=1
+                        elif ismeta:
+                            d=json.loads(f.read_text(encoding='utf-8-sig'));entries=d.get('entries') or (d.get('job') or {}).get('entries') or []
+                            if isinstance(entries,dict):entries=entries.values()
+                            for e in entries:
+                                if event.is_set():break
+                                if isinstance(e,dict) and e.get('id'):
+                                    self.yield_background();metadata[e['id']]=e;self.register_manifest(e,f,root);self.enrich(e['id'],e)
+                        else:
+                            items=self.read_items(f);had_items=False;cached_ids={r['id'] for r in cached if r['fingerprint']==fp};reused=False
+                            for item in items:
+                                had_items=True
+                                if event.is_set():break
+                                cid=item['id']
+                                if cid in seen and seen[cid]>=rank:continue
+                                if cid in cached_ids:
+                                    seen[cid]=rank;self.enrich(cid,metadata.get(cid,{}));reused=True;continue
+                                # A cached JSON remains preferred if an MD copy is discovered first.
+                                with self.connect() as db:old=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(cid,cid)).fetchone()
+                                if f.suffix.lower()=='.md' and old and Path(old['path']).suffix.lower()=='.json' and Path(old['path']).is_file():
+                                    seen[cid]=(1,Path(old['path']).stat().st_mtime_ns);continue
+                                self.store(item,f,fp,root,metadata.get(cid,{}));seen[cid]=rank;self.status['indexed']+=1
+                            if reused:self.status['cached']+=1
+                            if not event.is_set():
+                                with self.lock,self.connect() as db:db.execute('INSERT OR REPLACE INTO scanned_files VALUES(?,?,?)',(str(f),fp,'indexed' if had_items else 'ignored'))
+                        self.status['processed']+=1
+                    except Exception as e:
+                        if len(self.status['errors'])<40:self.status['errors'].append(f.name+': '+str(e))
+                    time.sleep(.005)
+                self.status['phase']='Scan stopped · cached chats remain available' if event.is_set() else f'Ready · {len(self.catalog()):,} conversations'
+            except Exception as e:
+                self.status['errors'].append(str(e));self.status['phase']='Scan failed'
+            finally:
+                if producer and producer.is_alive():
+                    event.set();producer.join(timeout=1)
+                self.status['scanning']=False;self.status['current_file']=''
+    def enrich(self,cid,meta):
+        if not meta:return
+        signal=surface_signal(meta)
+        kind,evidence=signal or (None,'')
+        project=meta.get('project') or '';project=project.get('title') or project.get('name') or '' if isinstance(project,dict) else project
+        with self.lock,self.connect() as db:
+            if kind:db.execute('UPDATE chats SET kind=?,kind_evidence=? WHERE id=?',(kind,evidence,cid))
+            if project:db.execute('UPDATE chats SET project=? WHERE id=?',(project,cid))
+            for k,mk in [('created','create_time'),('updated','update_time')]:
+                if meta.get(mk):db.execute('UPDATE chats SET '+k+'=? WHERE id=?',(epoch(meta[mk]),cid))
+            if meta.get('url'):db.execute('UPDATE chats SET url=? WHERE id=?',(meta['url'],cid))
+            changed=db.total_changes
+        if changed:self.revision+=1
+        if cid in self.live_sources:
+            c=self.live_sources[cid]
+            if kind:c.update(kind=kind,kind_evidence=evidence)
+            if project:c['project']=project
+            for k in ('create_time','update_time'):
+                if meta.get(k):c['created' if k=='create_time' else 'updated']=epoch(meta[k])
+            if meta.get('url'):c['url']=meta['url']
+    def store(self,item,path,fp,root,meta):
+        cid=item['id'];msgs=item['messages'];project=item.get('project')
+        self.semantic_state['ready']=False
+        if not isinstance(project,str):project=str(project or '')
+        created=item['created'] or min((m['time'] for m in msgs if m['time']),default=path.stat().st_mtime)
+        updated=item['updated'] or max((m['time'] for m in msgs if m['time']),default=created)
+        with self.lock,self.connect() as db:
+            if not db.execute("SELECT 1 FROM settings WHERE key='ftsRowMapV1'").fetchone():
+                db.execute('INSERT OR IGNORE INTO chunk_rows SELECT cid,rowid FROM chunks')
+                db.execute('INSERT OR REPLACE INTO title_rows SELECT cid,rowid FROM titles')
+                db.execute("INSERT INTO settings VALUES('ftsRowMapV1','true')")
+            db.execute('DELETE FROM titles WHERE rowid IN (SELECT rowid FROM title_rows WHERE cid=?)',(cid,))
+            title=db.execute('INSERT INTO titles VALUES(?,?)',(cid,item['title']))
+            db.execute('INSERT OR REPLACE INTO title_rows VALUES(?,?)',(cid,title.lastrowid))
+            db.execute('DELETE FROM messages WHERE cid=?',(cid,));db.execute('DELETE FROM chunks WHERE rowid IN (SELECT rowid FROM chunk_rows WHERE cid=?)',(cid,));db.execute('DELETE FROM chunk_rows WHERE cid=?',(cid,));db.execute('DELETE FROM vectors WHERE cid=?',(cid,))
+            db.execute('INSERT OR REPLACE INTO chats(id,title,url,created,updated,kind,project,path,fingerprint,count,folder,kind_evidence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(cid,item['title'],item['url'],created,updated,canonical_kind(item['kind']),project,str(path),fp,len(msgs),str(path.parent.relative_to(root)),item.get('kind_evidence','')))
+            for seq,m in enumerate(msgs):
+                if seq%20==0:self.yield_background()
+                db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?,?)',(cid,seq,m['role'],m['channel'],m['text'],m['time'],m['visible'],json.dumps(m.get('extras') or {},ensure_ascii=False)))
+                if m['visible']:
+                    for chunk in chunks(m['text']):
+                        inserted=db.execute('INSERT INTO chunks(cid,seq,title,text) VALUES(?,?,?,?)',(cid,seq,item['title'],chunk))
+                        db.execute('INSERT INTO chunk_rows VALUES(?,?)',(cid,inserted.lastrowid))
+        self.revision+=1
+        self.live_sources[cid]=dict(id=cid,title=item['title'],url=item['url'],created=created,updated=updated,kind=canonical_kind(item['kind']),kind_evidence=item.get('kind_evidence',''),project=project,path=str(path),fingerprint=fp,count=len(msgs),folder=str(path.parent.relative_to(root)),loaded=True)
+        self.enrich(cid,meta)
+    def page(self,cid,before=None,around=None,limit=100,details=False,after=None):
+        limit=max(1,min(int(limit),200));predicate='' if details else ' AND visible=1'
+        with self.connect() as db:
+            known=db.execute('SELECT id FROM chats WHERE id=?',(cid,)).fetchone()
+            if not known:
+                source=db.execute('SELECT path FROM manifest_entries WHERE cid=? AND available=1',(cid,)).fetchone()
+                if not source:raise ValueError('The saved conversation file was not found in this scan boundary.')
+                return self.read_source_page(cid,source['path'],before,around,limit,details,after)
+            total=db.execute('SELECT count(*) FROM messages WHERE cid=?'+predicate,(cid,)).fetchone()[0]
+            if after is not None:
+                rows=db.execute('SELECT * FROM messages WHERE cid=?'+predicate+' AND seq>? ORDER BY seq LIMIT ?',(cid,int(after),limit)).fetchall()
+            elif around is not None:
+                rows=db.execute('SELECT * FROM messages WHERE cid=?'+predicate+' AND seq>=? ORDER BY seq LIMIT ?',(cid,max(0,int(around)-8),limit)).fetchall()
+            else:
+                rows=db.execute('SELECT * FROM messages WHERE cid=?'+predicate+' AND seq<? ORDER BY seq DESC LIMIT ?',(cid,int(before) if before is not None else 2**31,limit)).fetchall()[::-1]
+            first=rows[0]['seq'] if rows else 0
+            older=db.execute('SELECT count(*) FROM messages WHERE cid=?'+predicate+' AND seq<?',(cid,first)).fetchone()[0]
+            last=rows[-1]['seq'] if rows else -1
+            newer=db.execute('SELECT count(*) FROM messages WHERE cid=?'+predicate+' AND seq>?',(cid,last)).fetchone()[0]
+            return {'messages':[presented_message(dict(dict(r),extras=json.loads(r['extras'] or '{}'))) for r in rows],'total':total,'older':older,'newer':newer,'first':first}
+    def source_data(self,cid):
+        if self.ui_cache is not None and cid in self.ui_cache['chats']:r={'path':self.ui_cache['chats'][cid]['path']}
+        else:
+            with self.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(cid,cid)).fetchone()
+        if not r or Path(r['path']).suffix.lower()!='.json':return {},None
+        path=Path(r['path']);raw=json.loads(path.read_text(encoding='utf-8-sig'))
+        if isinstance(raw,list):raw=next((d for d in raw if str(d.get('conversation_id') or d.get('id'))==cid),{})
+        if isinstance(raw.get('conversation'),dict):raw=raw['conversation']
+        return raw,path
+    def choose_version(self,cid,target):
+        d,path=self.source_data(cid);mp,children,_=graph_context(d)
+        if target not in mp:raise ValueError('This version was not saved in the JSON export.')
+        selected=d.get('current_node');descendants=set();todo=[target]
+        while todo:
+            k=todo.pop()
+            if k in descendants:continue
+            descendants.add(k);todo.extend(children[k])
+        if selected in descendants:return selected
+        leaves=[k for k in descendants if not children[k]]
+        return max(leaves,key=lambda k:epoch((mp[k].get('message') or {}).get('create_time')),default=target)
+    def branch_page(self,cid,leaf,before=None,around=None,limit=100,details=False,after=None):
+        d,path=self.source_data(cid)
+        if not path or leaf not in d.get('mapping',{}):raise ValueError('Saved JSON branch was not found.')
+        key=(cid,leaf,path.stat().st_mtime_ns)
+        if key not in self.branch_cache:
+            parsed=parse_json(d,path,leaf);self.branch_cache.clear();self.branch_cache[key]=[dict(m,seq=i,cid=cid) for i,m in enumerate(parsed['messages'])]
+        allrows=[r for r in self.branch_cache[key] if details or r['visible']];limit=max(1,min(int(limit),200))
+        if around is not None:
+            rows=[r for r in allrows if r['seq']>=max(0,int(around)-8)][:limit]
+        elif after is not None:rows=[r for r in allrows if r['seq']>int(after)][:limit]
+        else:rows=[r for r in allrows if before is None or r['seq']<int(before)][-limit:]
+        first=rows[0]['seq'] if rows else 0;last=rows[-1]['seq'] if rows else -1
+        return {'messages':rows,'total':len(allrows),'older':sum(r['seq']<first for r in allrows),'newer':sum(r['seq']>last for r in allrows),'first':first,'leaf':leaf}
+    def search(self,q,mode='smart',cid=None):
+        if mode in ('exact','exact_typo'):
+            from phrase_search import phrase_search
+            return phrase_search(self,q,mode=='exact_typo',cid)
+        terms=re.findall(r'[^\W_]+',q,flags=re.U)[:24]
+        if not terms:return {'results':[],'mode':'keyword'}
+        groups=[]
+        for term in terms:
+            alts={term.lower()}
+            if mode!='keyword':
+                for family in CONCEPTS:
+                    if term.lower() in family:alts.update(family)
+            groups.append('('+' OR '.join('"'+t+'"*' for t in sorted(alts))+')')
+        query=' AND '.join(groups)
+        condition=' AND cid=?' if cid else ''
+        def fetch(query):
+            with self.connect() as db:
+                return [dict(r) for r in db.execute("SELECT cid,seq,title,snippet(chunks,3,'','',' … ',42) snippet,bm25(chunks,0,0,5,1) score FROM chunks WHERE chunks MATCH ?"+condition+" ORDER BY score LIMIT 180",(('text : ('+query+')',cid) if cid else ('text : ('+query+')',)))]
+        rows=fetch(query)
+        if len(rows)<8:rows+=fetch(' OR '.join(groups))
+        exact=[]
+        with self.connect() as db:
+            exact=[dict(r) for r in db.execute('SELECT id cid,-1 seq,title,title snippet,-100 score FROM chats WHERE id LIKE ? OR title LIKE ? LIMIT 20',('%'+q+'%','%'+q+'%'))]
+        with self.connect() as db:
+            title_hits=[dict(r) for r in db.execute("SELECT cid,-1 seq,title,title snippet,bm25(titles) score FROM titles WHERE titles MATCH ?"+condition+" ORDER BY score LIMIT 30",((query,cid) if cid else (query,)))]
+        catalog_hits=[]
+        for c in (list(self.ui_cache['chats'].values()) if self.ui_cache is not None else self.catalog()):
+            if c['loaded'] or (cid and cid!=c['id']):continue
+            title=c['title'] or '';words=re.findall(r'[^\W_]+',title.lower(),flags=re.U)
+            if q.lower() in c['id'].lower() or q.lower() in title.lower() or all(any(word.startswith(term.lower()) for word in words) for term in terms):
+                catalog_hits.append(dict(cid=c['id'],seq=-1,title=title,snippet=title,score=-100))
+        rows=exact+catalog_hits+title_hits+rows
+        if cid:rows=[r for r in rows if r['cid']==cid]
+        used=set();clean=[]
+        for r in rows:
+            key=(r['cid'],r['seq'])
+            if key not in used:used.add(key);clean.append(r)
+        used_mode='keyword' if mode=='keyword' else 'smart (text + related words)'
+        if mode in ('semantic','hybrid'):
+            if not self.semantic_state['ready']:
+                self.request_semantic()
+                return {'results':clean[:60],'mode':used_mode,'notice':self.semantic_state.get('phase') or 'Semantic setup/indexing started in the background. Progress is shown in Settings; text results remain available.'}
+            semantic=self.semantic_search(q)
+            if cid:semantic=[r for r in semantic if r['cid']==cid]
+            if mode=='semantic':clean=semantic
+            else:
+                ranks={}; lookup={}
+                for stream in (clean,semantic):
+                    for i,r in enumerate(stream):
+                        key=(r['cid'],r['seq']);lookup[key]=r;ranks[key]=ranks.get(key,0)+1/(60+i)
+                clean=[lookup[k] for k in sorted(ranks,key=ranks.get,reverse=True)]
+            used_mode=mode
+        result={'results':clean[:60],'mode':used_mode}
+        coverage=self.coverage()
+        if coverage['available']>coverage['indexed']:result['notice']=f"Content search covers {coverage['indexed']} indexed of {coverage['available']} available chats; titles and IDs are searchable now. See discovery notes for pending or skipped files."
+        return result
+    def request_semantic(self):
+        if not self.semantic_state['building']:
+            threading.Thread(target=self.build_semantic,daemon=True).start()
+    def build_semantic(self,allow_setup=True):
+        if not self.semantic_lock.acquire(False):return
+        self.semantic_state.update(building=True,error='',count=0,phase='Preparing local semantic search…')
+        try:
+            modelpath=APP/'models'/'semantic'
+            if allow_setup and (not (APP/'.semantic-packages'/'.ready').is_file() or not (modelpath/'.ready').is_file()):
+                self.semantic_state['phase']='Setting up local semantic search…'
+                log=self.data_dir/'semantic-setup.log'
+                with log.open('w',encoding='utf-8') as output:
+                    proc=subprocess.Popen([sys.executable,str(APP/'setup_semantic.py')],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',bufsize=1)
+                    for line in proc.stdout:
+                        output.write(line);output.flush()
+                        if line.startswith('VIEWER_SETUP:'):self.semantic_state['phase']=line[len('VIEWER_SETUP:'):].strip()
+                    if proc.wait():raise RuntimeError('Semantic setup was interrupted. Select semantic again to retry. Details: '+str(log))
+            activate_semantic()
+            import numpy as np
+            import torch
+            torch.set_num_threads(1)
+            from sentence_transformers import SentenceTransformer
+            self.semantic_state['phase']='Loading the local meaning model…'
+            self.semantic_model=SentenceTransformer(str(modelpath),local_files_only=True,device='cpu')
+            with self.connect() as db: rows=list(db.execute('SELECT cid,seq,title,text FROM chunks'))
+            self.semantic_state['phase']='Indexing saved messages'
+            counts={};batch=[]
+            with self.lock,self.connect() as db:db.execute('DELETE FROM vectors')
+            for r in rows:
+                key=(r['cid'],r['seq']);part=counts.get(key,0);counts[key]=part+1
+                batch.append((r,part))
+                if len(batch)>=32:
+                    self._embed_batch(batch,np);batch=[]
+            if batch:self._embed_batch(batch,np)
+            self.semantic_state.update(ready=True,count=len(rows),phase='')
+        except Exception as e:self.semantic_state.update(ready=False,error=str(e),phase='')
+        finally:self.semantic_state['building']=False;self.semantic_lock.release()
+    def _embed_batch(self,batch,np):
+        texts=[r['title']+'\n'+r['text'] for r,_ in batch]
+        vecs=self.semantic_model.encode(texts,normalize_embeddings=True,show_progress_bar=False)
+        with self.lock,self.connect() as db:
+            for (r,part),text,v in zip(batch,texts,vecs):db.execute('INSERT INTO vectors VALUES(?,?,?,?,?)',(r['cid'],r['seq'],part,hashlib.sha256(text.encode()).hexdigest(),np.asarray(v,dtype='float32').tobytes()))
+        self.semantic_state['count']+=len(batch)
+    def semantic_search(self,q):
+        import numpy as np
+        query=self.semantic_model.encode([q],normalize_embeddings=True,show_progress_bar=False)[0]
+        with self.connect() as db:rows=list(db.execute('SELECT cid,seq,part,vector FROM vectors'))
+        ranked=[];seen=set()
+        for r in rows:ranked.append((float(np.dot(query,np.frombuffer(r['vector'],dtype='float32'))),r))
+        ranked.sort(key=lambda x:x[0],reverse=True);out=[]
+        with self.connect() as db:
+            for score,r in ranked:
+                key=(r['cid'],r['seq'])
+                if key in seen:continue
+                seen.add(key)
+                message=db.execute('SELECT m.text,c.title FROM messages m JOIN chats c ON c.id=m.cid WHERE m.cid=? AND m.seq=?',key).fetchone()
+                if not message:continue
+                parts=chunks(message['text']);part=min(r['part'],len(parts)-1)
+                out.append(dict(cid=r['cid'],seq=r['seq'],title=message['title'],snippet=parts[part][:350],score=score))
+                if len(out)>=60:break
+        return out
+    def asset(self,cid,relative):
+        if self.ui_cache is not None and cid in self.ui_cache['chats']:r={'path':self.ui_cache['chats'][cid]['path']}
+        else:
+            with self.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(cid,cid)).fetchone()
+        if not r:raise FileNotFoundError('Unknown conversation')
+        p=Path(r['path']);rel=urllib.parse.unquote(relative).replace('\\','/')
+        if rel.startswith(('http:','https:','data:','javascript:','file:')):raise ValueError('Only exported local files can be opened here.')
+        roots=[p.parent]
+        settings=self.settings();start=settings.get('scan_start')
+        if start:
+            base=Path(start).resolve()
+            for _ in range(settings.get('scan_up',2)):
+                if base.parent.parent==base.parent:break
+                base=base.parent
+            roots.append(base)
+        f=(p.parent/rel).resolve()
+        if not any(f.is_relative_to(x.resolve()) for x in roots) or not f.is_file():raise FileNotFoundError('Local attachment was not found within the scanned folder.')
+        return f
+
+CONCEPTS=[{'food','nutrition','diet','meal','eating'},{'weather','forecast','rain','temperature','humidity'},
+ {'energy','electricity','power','fuel','oil','exergy'},{'scarcity','shortage','collapse','fragility','risk'},
+ {'intelligence','cognition','iq','reasoning','psychometrics'},{'export','backup','archive','download'},
+ {'roleplay','rp','character','scene','simulation'},{'clothing','clothes','outfit','dress','skirt'},
+ {'population','demography','fertility','births','reproduction'},{'search','find','retrieve','recall'},
+ {'computer','pc','laptop','windows','bluetooth'},{'money','cost','price','budget','finance'}]
+
+def chunks(text,size=1200):
+    # Overlap protects meaning and phrases at chunk boundaries; small enough for MiniLM.
+    return [text[i:i+size] for i in range(0,len(text),size-200)] or ['']
+
+def reader_worker_init():
+    # Close a reader subprocess if its launcher is forcibly closed.
+    parent=multiprocessing.parent_process()
+    def watch_parent():
+        while True:
+            time.sleep(.5)
+            if parent is not None and not parent.is_alive():os._exit(0)
+    threading.Thread(target=watch_parent,daemon=True).start()
+
+def source_page(cid,path,before=None,around=None,limit=100,details=False,after=None):
+    path=Path(path);limit=max(1,min(int(limit),200))
+    if path.stat().st_size>512*1024*1024:raise ValueError('File over 512 MiB; split the export first.')
+    if path.suffix.lower()=='.md':item=parse_md(path.read_text(encoding='utf-8-sig',errors='replace'),path)
+    else:
+        data=json.loads(path.read_text(encoding='utf-8-sig'))
+        if isinstance(data,list):data=next((x for x in data if str(x.get('conversation_id') or x.get('id'))==cid),{})
+        item=parse_json(data,path)
+    if not item:raise ValueError('This export does not contain readable chat messages.')
+    allrows=[dict(m,seq=i,cid=cid) for i,m in enumerate(item['messages']) if details or m['visible']]
+    if around is not None:rows=[m for m in allrows if m['seq']>=max(0,int(around)-8)][:limit]
+    elif after is not None:rows=[m for m in allrows if m['seq']>int(after)][:limit]
+    else:rows=[m for m in allrows if before is None or m['seq']<int(before)][-limit:]
+    first=rows[0]['seq'] if rows else 0;last=rows[-1]['seq'] if rows else -1
+    return dict(messages=rows,total=len(allrows),older=sum(m['seq']<first for m in allrows),newer=sum(m['seq']>last for m in allrows),first=first)
+
+def bounded_text(text,budget):
+    # JSON escapes and UTF-8 both count toward the body budget.
+    if len(json.dumps(text,ensure_ascii=False).encode())<=budget:return text
+    low=0;high=min(len(text),budget)
+    while low<high:
+        mid=(low+high+1)//2
+        if len(json.dumps(text[:mid],ensure_ascii=False).encode())<=budget:low=mid
+        else:high=mid-1
+    return text[:low]
+
+def bounded_message_page(page,budget=32768,around=None,forward=False):
+    budget=max(4096,min(int(budget),131072))-1024;rows=[]
+    for m in page['messages']:
+        part=bounded_text(m['text'],min(16384,budget//2))
+        if len(part)<len(m['text']):
+            m=dict(m,text=part,text_complete=False,text_next=len(part),text_length=len(m['text']))
+        rows.append(m)
+    page=dict(page,messages=rows)
+    if not rows:return page
+    sizes=[len(json.dumps(m,ensure_ascii=False,separators=(',',':')).encode()) for m in rows]
+    if sum(sizes)<=budget:return page
+    if around is not None:
+        first=min(range(len(rows)),key=lambda i:abs(rows[i]['seq']-int(around)));last=first+1;size=sizes[first]
+        while first>0 or last<len(rows):
+            candidates=[i for i in (first-1,last) if 0<=i<len(rows) and size+sizes[i]<=budget]
+            if not candidates:break
+            i=min(candidates,key=lambda i:abs(rows[i]['seq']-int(around)));size+=sizes[i]
+            if i<first:first=i
+            else:last=i+1
+    elif forward:
+        first=0;last=1;size=sizes[0]
+        while last<len(rows) and size+sizes[last]<=budget:size+=sizes[last];last+=1
+    else:
+        first=len(rows)-1;last=len(rows);size=sizes[first]
+        while first>0 and size+sizes[first-1]<=budget:first-=1;size+=sizes[first]
+    return dict(page,messages=rows[first:last],older=page['older']+first,newer=page['newer']+len(rows)-last,first=rows[first]['seq'])
+
+def scan_worker(data_dir,start,up,updates,cancel,foreground):
+    reader_worker_init()
+    a=Archive(data_dir,background_process=False,initialize=False);a.foreground=foreground;a.cancel_event=cancel
+    done=threading.Event()
+    def report():
+        while not done.wait(.15):
+            try:updates.put_nowait((dict(a.status),a.revision,list(a.live_sources.values()),None))
+            except queue.Full:pass
+    t=threading.Thread(target=report,daemon=True);t.start()
+    try:a.scan(start,up,cancel)
+    finally:
+        done.set();t.join(timeout=1)
+        # Make room for the final status, without blocking shutdown on a full pipe.
+        try:updates.put((dict(a.status),a.revision,list(a.live_sources.values()),a.coverage()),timeout=2)
+        except queue.Full:pass
+        a.close()
+
+class Server(ThreadingHTTPServer):
+    daemon_threads=True
+    request_queue_size=64
+    def __init__(self,address,archive):
+        super().__init__(address,Handler);self.archive=archive;self.token=secrets.token_urlsafe(32)
+        self.transfer_lock=threading.Lock();self.transfers={};self.recent_transfers=[];self.renderer_cache={}
+    def transfer_status(self):
+        with self.transfer_lock:
+            active=[dict(r,elapsed_ms=round((time.monotonic()-r['started'])*1000)) for r in self.transfers.values()]
+            recent=[dict(r) for r in self.recent_transfers[-3:]]
+        for row in active:row.pop('started',None)
+        return dict(active=active[:4],recent=recent)
+
+class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        # Headers followed by a small body should not wait for a delayed ACK.
+        self.connection.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
+    def log_message(self,*a):pass
+    def send(self,body,status=200,ctype='application/json',headers=None):
+        if not isinstance(body,bytes):body=json.dumps(body,ensure_ascii=False,separators=(',',':')).encode()
+        headers=dict(headers or {})
+        if len(body)>1024 and ctype.startswith(('application/json','text/','application/javascript')) and re.search(r'(?:^|,)\s*gzip\s*(?:,|$)',self.headers.get('Accept-Encoding','')):
+            body=gzip.compress(body,compresslevel=3,mtime=0);headers.update({'Content-Encoding':'gzip','Vary':'Accept-Encoding'})
+        self.send_response(status);self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(len(body)))
+        self.send_header('X-Content-Type-Options','nosniff');self.send_header('Cache-Control',headers.pop('Cache-Control','no-store'))
+        self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+        for k,v in (headers or {}).items():self.send_header(k,v)
+        endpoint=urllib.parse.urlsplit(self.path).path;track=endpoint in ('/api/state','/api/catalog','/api/messages')
+        key=id(self);record=dict(endpoint=endpoint,bytes=len(body),written=0,encoding=headers.get('Content-Encoding','identity'),started=time.monotonic())
+        if track:
+            with self.server.transfer_lock:self.server.transfers[key]=record
+        try:
+            self.end_headers()
+            for offset in range(0,len(body),16*1024):
+                part=body[offset:offset+16*1024];self.wfile.write(part)
+                if track:
+                    with self.server.transfer_lock:record['written']+=len(part)
+        finally:
+            if track:
+                with self.server.transfer_lock:
+                    self.server.transfers.pop(key,None)
+                    completed=dict(record,elapsed_ms=round((time.monotonic()-record['started'])*1000));completed.pop('started',None)
+                    self.server.recent_transfers.append(completed);self.server.recent_transfers=self.server.recent_transfers[-12:]
+    def authorized(self):
+        host=self.headers.get('Host','').split(':')[0]
+        if host not in ('127.0.0.1','localhost'):return False
+        cookies=http.cookies.SimpleCookie()
+        try:cookies.load(self.headers.get('Cookie',''))
+        except http.cookies.CookieError:return False
+        token=cookies.get('viewer_token');return bool(token and secrets.compare_digest(token.value,self.server.token))
+    def do_GET(self):
+        try:
+            url=urllib.parse.urlsplit(self.path);q={k:v[-1] for k,v in urllib.parse.parse_qs(url.query).items()}
+            if url.path=='/' and secrets.compare_digest(q.get('token',''),self.server.token):
+                self.send(b'',302,'text/plain',{'Location':'/','Set-Cookie':'viewer_token='+self.server.token+'; HttpOnly; SameSite=Strict; Path=/'});return
+            if not self.authorized():self.send({'error':'Open the viewer using START-VIEWER.bat to establish a local session.'},403);return
+            a=self.server.archive
+            if url.path=='/api/health':self.send(dict(ok=True,version=VERSION,pid=os.getpid(),scanning=a.status.get('scanning',False),transfers=self.server.transfer_status()));return
+            if url.path=='/api/state':self.send(a.state(q.get('since'),5,q.get('priority','')));return
+            if url.path=='/api/catalog':self.send(a.catalog_batch(q.get('offset',0),q.get('limit',25),q.get('priority','')));return
+            if url.path=='/api/message-text':
+                with a.foreground_read():self.send(a.message_fragment(q['id'],q['seq'],q.get('offset',0),q.get('leaf')))
+                return
+            if url.path=='/api/renderer':
+                names={'marked':'vendor/marked.js','katex':'vendor/katex/katex.min.js','highlight':'vendor/highlight.js'};name=q.get('name')
+                if name not in names:raise ValueError('Unknown renderer asset')
+                if name not in self.server.renderer_cache:self.server.renderer_cache[name]=(APP/'web'/names[name]).read_text(encoding='utf-8')
+                text=self.server.renderer_cache[name];offset=max(0,int(q.get('offset',0)));part=text[offset:offset+8192].encode()[:8192].decode('utf-8',errors='ignore');end=offset+len(part)
+                self.send(dict(text=part,next=end,done=end>=len(text)));return
+            if url.path=='/api/messages':
+                args=(q['id'],q.get('before'),q.get('around'),q.get('limit',100),q.get('details')=='1',q.get('after'))
+                with a.foreground_read():page=a.branch_page(args[0],q['leaf'],*args[1:]) if q.get('leaf') else a.foreground_page(*args)
+                self.send(bounded_message_page(page,q.get('bytes',32768),q.get('around'),q.get('after') is not None));return
+            if url.path=='/api/search':self.send(a.search(q.get('q',''),q.get('mode','smart'),q.get('id')));return
+            if url.path=='/api/version':
+                leaf=a.choose_version(q['id'],q['target']);d,path=a.source_data(q['id']);parsed=parse_json(d,path,leaf)
+                seq=next((i for i,m in enumerate(parsed['messages']) if m.get('extras',{}).get('node_id')==q['target']),0)
+                self.send({'leaf':leaf,'seq':seq});return
+            if url.path=='/api/branches':
+                d,path=a.source_data(q['id']);mp,children,_=graph_context(d)
+                leaves=[dict(id=k,time=epoch((v.get('message') or {}).get('create_time')),preview=content_text((v.get('message') or {}).get('content',{}))[:160],selected=k==d.get('current_node')) for k,v in mp.items() if not children[k]]
+                self.send({'branches':leaves});return
+            if url.path=='/api/source':
+                if a.ui_cache is not None and q['id'] in a.ui_cache['chats']:r={'path':a.ui_cache['chats'][q['id']]['path']}
+                else:
+                    with a.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(q['id'],q['id'])).fetchone()
+                if not r:raise FileNotFoundError('Unknown conversation')
+                f=Path(r['path']);self.send(f.read_bytes(),ctype='application/octet-stream',headers={'Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(f.name)});return
+            if url.path=='/api/asset':
+                f=a.asset(q['id'],q['path']);ctype=mimetypes.guess_type(f.name)[0] or 'application/octet-stream'
+                # Exported HTML/SVG/code always downloads; never executes in the viewer origin.
+                inline=f.suffix.lower() in ('.png','.jpg','.jpeg','.gif','.webp','.avif','.bmp')
+                self.send(f.read_bytes(),ctype=ctype if inline else 'application/octet-stream',headers={} if inline else {'Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(f.name)});return
+            file=APP/'web'/('index.html' if url.path=='/' else url.path.lstrip('/'))
+            if not file.resolve().is_relative_to((APP/'web').resolve()) or not file.is_file():self.send({'error':'Not found'},404);return
+            self.send(file.read_bytes(),ctype=static_mime(file),headers={'Cache-Control':'private, max-age=86400'} if file.resolve().is_relative_to((APP/'web'/'vendor').resolve()) else None)
+        except Exception as e:self.send({'error':str(e)},400)
+    def do_POST(self):
+        try:
+            origin=self.headers.get('Origin')
+            if not self.authorized() or (origin and origin not in ('http://127.0.0.1:'+str(self.server.server_port),'http://localhost:'+str(self.server.server_port))):self.send({'error':'Unauthorized local request'},403);return
+            length=int(self.headers.get('Content-Length','0'))
+            if length>2*1024*1024:raise ValueError('Request too large')
+            d=json.loads(self.rfile.read(length) or '{}');a=self.server.archive
+            if self.path=='/api/scan':a.request_scan(d['path'],d.get('up',2))
+            elif self.path=='/api/stop-scan':a.stop_scan()
+            elif self.path=='/api/pick-folder':
+                if os.name=='nt':
+                    script="Add-Type -AssemblyName System.Windows.Forms; $f=New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description='Choose your exported chats folder'; $f.ShowNewFolderButton=$false; if($f.ShowDialog() -eq 'OK'){[Console]::OutputEncoding=[Text.Encoding]::UTF8; Write-Output $f.SelectedPath}"
+                    result=subprocess.run(['powershell.exe','-NoProfile','-STA','-Command',script],capture_output=True,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW)
+                    if result.returncode:raise ValueError('Folder dialog could not open. Paste the folder path instead.')
+                    folder=result.stdout.strip().lstrip('\ufeff')
+                else:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root=tk.Tk();root.withdraw();root.attributes('-topmost',True);folder=filedialog.askdirectory(title='Choose your exported chats folder',initialdir=d.get('path') or str(APP));root.destroy()
+                self.send({'path':folder});return
+            elif self.path=='/api/settings':a.save_settings(d)
+            elif self.path=='/api/organize':a.organize(d.pop('id'),d)
+            elif self.path=='/api/semantic':a.request_semantic()
+            elif self.path=='/api/source-links':self.send(a.linked_sources(d['id'],d.get('refs',[]),d.get('seq'),d.get('node_id')));return
+            elif self.path=='/api/shutdown':threading.Thread(target=self.server.shutdown,daemon=True).start()
+            else:self.send({'error':'Unknown action'},404);return
+            self.send({'ok':True})
+        except Exception as e:self.send({'error':str(e)},400)
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--root',default=str(APP));parser.add_argument('--up',type=int,default=None);parser.add_argument('--port',type=int,default=0);parser.add_argument('--no-browser',action='store_true');parser.add_argument('--data-dir',default=str(APP/'.viewer-data'));args=parser.parse_args()
+    a=Archive(args.data_dir);settings=a.settings();a.enable_ui_cache();root=args.root if args.root!=str(APP) else settings.get('scan_start',args.root);up=args.up if args.up is not None else settings.get('scan_up',2)
+    server=Server(('127.0.0.1',args.port),a);url=f'http://127.0.0.1:{server.server_port}/?token={server.token}'
+    (a.data_dir/'session.json').write_text(json.dumps({'url':url,'pid':os.getpid()}))
+    print('Offline Chat Viewer is running. Close this window to stop.\n'+url,flush=True)
+    if not settings.get('scanPaused'):a.request_scan(root,up)
+    else:a.status['phase']='Scan paused · choose a folder or resume'
+    if (APP/'models'/'semantic').is_dir():
+        def semantic_after_scan():
+            while a.status['scanning']:time.sleep(.2)
+            a.build_semantic(allow_setup=False)
+        threading.Thread(target=semantic_after_scan,daemon=True).start()
+    if not args.no_browser:threading.Thread(target=webbrowser.open,args=(url,),daemon=True).start()
+    try:server.serve_forever()
+    except KeyboardInterrupt:pass
+    finally:a.close();server.server_close()
+
+if __name__=='__main__':main()
