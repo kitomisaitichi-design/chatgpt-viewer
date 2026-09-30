@@ -6,17 +6,20 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from chat_types import surface_signal, source_surface_hint, source_header, canonical_kind, prefer_signal, free_account
+from source_reader import SourceReader, page_rows, native_conversation
 
 APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.0.11'
+VERSION = '1.0.13'
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 SKIP = {'.git','.svn','node_modules','__pycache__','.viewer-data','.venv','venv',
         'Windows','Program Files','Program Files (x86)','$Recycle.Bin','System Volume Information',
         'AppData','.cache','.npm','.local','exporter-source',
         '.semantic-env','.semantic-packages','.semantic-staging','.semantic-cache','.semantic-old'}
+SKIP_LOWER={s.lower() for s in SKIP}|{'attachments','attachment-errors'}
 ROLE = re.compile(r'^## (You|User|Assistant|ChatGPT|Tool|System)(?: \(([^)]+)\))?\s*$')
 MODEL = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
 STATIC_MIME = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8',
@@ -159,6 +162,7 @@ def block_presentation(text,role='',content=None,message=None):
     kind=content.get('content_type');language=content.get('language') or (message.get('metadata') or {}).get('language') or ''
     recipient=message.get('recipient') or '';author=(message.get('author') or {}).get('name') or ''
     if kind=='code':
+        if str(language).lower() in ('unknown','text','plain','plaintext','none'):language=''
         return dict(kind='code',language=language or ('python' if 'python' in recipient else block_presentation(text,'assistant').get('language','plaintext')),origin='saved')
     if kind=='execution_output' or role=='tool':
         return dict(kind='output',language='plaintext',label='STDOUT/STDERR' if kind=='execution_output' or 'python' in author else 'Tool output',origin='saved')
@@ -197,50 +201,25 @@ def block_presentation(text,role='',content=None,message=None):
 
 def presented_message(message):
     extras=dict(message.get('extras') or {})
+    existing=extras.get('presentation') or {}
+    if existing.get('kind')=='code' and str(existing.get('language','')).lower() in ('unknown','text','plaintext','none',''):
+        inferred=block_presentation(message['text'],'assistant')
+        if inferred.get('language'):extras['presentation']={**existing,'language':inferred['language']}
     if not extras.get('presentation'):
         presentation=block_presentation(message['text'],message.get('role',''))
         if presentation:extras['presentation']=presentation
     return dict(message,extras=extras)
 
 def surface_signal(data,models=True):
-    """Return positive product evidence; project membership is independent."""
-    if not isinstance(data,dict):return None
-    meta=data.get('metadata') if isinstance(data.get('metadata'),dict) else {}
-    for source in (data,meta):
-        for key in ('chat_kind','chatKind','surface','product','conversation_mode','conversation_origin','client','source'):
-            value=source.get(key)
-            if isinstance(value,dict):value=value.get('kind') or value.get('type') or value.get('name')
-            if not isinstance(value,str):continue
-            value=value.strip().lower()
-            if re.search(r'\bcodex\b',value):return ('codex','Saved '+key+': '+value)
-            if re.search(r'\bwork\b|\bworkmode\b',value):return ('work','Saved '+key+': '+value)
-    if models:
-        for source in (data,meta):
-            for key in ('default_model_slug','model_slug','resolved_model_slug'):
-                value=source.get(key)
-                if isinstance(value,str) and re.search(r'-wm(?:$|[-_])',value.lower()):
-                    return ('work','Inferred from saved Work model marker: '+value)
-    return None
+    from chat_types import surface_signal as classify
+    return classify(data,models)
 
 def source_surface_hint(path):
-    # Old caches omitted top-level product/model fields. Recover bounded header
-    # metadata in the background instead of reparsing every message.
-    path=Path(path)
-    if path.suffix.lower()!='.json':return None
-    try:
-        with path.open(encoding='utf-8-sig',errors='replace') as stream:head=stream.read(16384)
-    except OSError:return None
-    if not head.lstrip().startswith('{'):return None
-    head=re.split(r'"(?:mapping|messages|chatlog)"\s*:',head,maxsplit=1)[0]
-    metadata={}
-    for key,value in re.findall(r'"(chat_kind|chatKind|surface|product|conversation_mode|conversation_origin|default_model_slug)"\s*:\s*("(?:[^"\\]|\\.)*")',head):
-        try:metadata[key]=json.loads(value)
-        except ValueError:pass
-    return surface_signal(metadata)
+    return surface_signal(source_header(path))
 
 def canonical_kind(value):
-    value=str(value or '').lower()
-    return 'codex' if re.search(r'\bcodex\b',value) else 'work' if re.search(r'\bwork\b|\bworkmode\b',value) else 'chat'
+    from chat_types import canonical_kind as normalize
+    return normalize(value)
 
 def parse_json(data,path,leaf=None):
     if not isinstance(data,dict): return None
@@ -255,24 +234,28 @@ def parse_json(data,path,leaf=None):
             text=content_text(c); attachments=(m.get('metadata') or {}).get('attachments') or []
             if attachments: text+='\n\n'+'\n'.join('Attachment reference: '+str(a.get('name') or a.get('filename') or a.get('id') or a.get('file_id')) for a in attachments)
             visible=role in ('user','assistant') and channel not in ('analysis','justify','confidence') and c.get('content_type') not in ('thoughts','reasoning_recap','execution_output')
+            if role=='assistant' and m.get('recipient') not in (None,'','all'):visible=False
             if not text.strip(): continue
             mid=node.get('id') or node_ids.get(id(node),'')
-            extra={'node_id':mid,'receipt':receipt(m.get('metadata') or {}),'versions':versions(mid) if mid else [],'sources':source_links(m.get('metadata') or {}),'presentation':block_presentation(text,role,c,m)}
+            extra={'node_id':mid,'receipt':receipt(m.get('metadata') or {}),'versions':versions(mid) if mid else [],'sources':source_links(m.get('metadata') or {}),'presentation':block_presentation(text,role,c,m),'account_free':free_account(data) or free_account(m)}
             messages.append(dict(role=role,channel=channel,text=text,time=epoch(m.get('create_time')),visible=int(visible),extras=extra))
     elif isinstance(data.get('messages'),list):
         for m in data['messages']:
             if not isinstance(m,dict): continue
             role=m.get('role') or (m.get('author') or {}).get('role','assistant')
             text=content_text(m.get('content') or m.get('text') or '')
-            if text.strip(): messages.append(dict(role=role,channel=m.get('channel',''),text=text,time=epoch(m.get('create_time')),visible=int(role in ('user','assistant')),extras={'sources':source_links(m.get('metadata') or m),'presentation':block_presentation(text,role,m.get('content'),m)}))
+            if text.strip(): messages.append(dict(role=role,channel=m.get('channel',''),text=text,time=epoch(m.get('create_time')),visible=int(role in ('user','assistant') and m.get('channel') not in ('analysis','justify','confidence')),extras={'receipt':receipt(m.get('metadata') or m),'sources':source_links(m.get('metadata') or m),'presentation':block_presentation(text,role,m.get('content'),m),'account_free':free_account(data) or free_account(m)}))
     else: return None
     cid=str(data.get('conversation_id') or data.get('id') or infer_id(path))
     signal=surface_signal(data)
-    if not signal:
-        for m in messages:
-            saved_receipt=(m.get('extras') or {}).get('receipt') or {}
-            signal=surface_signal({'model_slug':saved_receipt.get('served') or saved_receipt.get('picked')})
-            if signal:break
+    # Inspect saved metadata across all branches. A changed default model and
+    # inactive Work turns must not silently put a Work chat back into Chat.
+    raw_messages=[n.get('message') or {} for n in (data.get('mapping') or {}).values()] if isinstance(data.get('mapping'),dict) else data.get('messages') or []
+    for m in raw_messages:
+        if isinstance(m,dict):
+            turn=dict(m)
+            if free_account(data):turn['is_free_account']=True
+            signal=prefer_signal(signal,surface_signal(turn))
     kind,evidence=signal or ('chat','No saved Work/Codex product marker')
     return dict(id=cid,title=data.get('title') or path.stem,created=epoch(data.get('create_time')),updated=epoch(data.get('update_time')),kind=kind,kind_evidence=evidence,project=data.get('project') or '',url=data.get('url') or ('' if cid.startswith('local-') else 'https://chatgpt.com/c/'+urllib.parse.quote(cid)),messages=messages)
 
@@ -313,6 +296,7 @@ class Archive:
         self.dbpath=self.data_dir/'archive.sqlite3';self.lock=threading.RLock(); self.scan_lock=threading.Lock()
         self.branch_cache={};self.revision=0;self.cancel_event=threading.Event();self.request_lock=threading.Lock()
         self.background_process=background_process;self.worker=None;self.reader_pool=None;self.reader_future=None;self.source_link_cache={}
+        self.source_reader=SourceReader(parse_json,parse_md)
         self.mp=multiprocessing.get_context('spawn');self.foreground=self.mp.Event();self.foreground_count=0;self.foreground_lock=threading.Lock()
         self.status=dict(scanning=False,phase='Ready',files=0,indexed=0,errors=[],roots=[])
         self.ui_cache=None;self.ui_cache_lock=threading.Lock();self.live_sources={};self.cache_stop=threading.Event();self.cache_thread=None
@@ -369,21 +353,22 @@ class Archive:
         # Read saved receipt metadata only, never reparse all conversation bodies.
         signals={}
         with self.connect() as db:
-            for row in db.execute("SELECT cid,extras FROM messages WHERE role='assistant' AND extras LIKE '%-wm%'"):
+            marker=db.execute("SELECT value FROM settings WHERE key='typeRepairVersion'").fetchone()
+            if marker and json.loads(marker['value'])==VERSION:return
+            cached=[dict(row) for row in db.execute("SELECT id,kind,path FROM chats WHERE kind!='codex'")]
+            free_ids={row['id'] for row in cached if free_account(source_header(row['path']))}
+            for row in db.execute("SELECT cid,extras FROM messages WHERE role='assistant' AND (extras LIKE '%-wm%' OR extras LIKE '%luna%' OR extras LIKE '%terra%' OR extras LIKE '%astra%' OR extras LIKE '%sol%')"):
                 if self.cache_stop.is_set():return
-                if row['cid'] in signals:continue
-                receipt=(json.loads(row['extras']) or {}).get('receipt') or {}
-                signal=surface_signal({'model_slug':receipt.get('served') or receipt.get('picked')})
-                if signal:signals[row['cid']]=signal
+                extras=json.loads(row['extras']) or {};receipt=extras.get('receipt') or {}
+                signal=surface_signal({'model_slug':receipt.get('served'),'default_model_slug':receipt.get('picked'),'is_free_account':extras.get('account_free') or row['cid'] in free_ids})
+                if signal:signals[row['cid']]=prefer_signal(signals.get(row['cid']),signal)
             for row in db.execute('SELECT cid,metadata FROM manifest_entries'):
                 signal=surface_signal(json.loads(row['metadata']),models=False)
-                if signal:signals[row['cid']]=signal
-            cached=[dict(row) for row in db.execute("SELECT id,kind,path FROM chats WHERE kind!='codex'")]
+                if signal:signals[row['cid']]=prefer_signal(signals.get(row['cid']),signal)
         for row in cached:
             if self.cache_stop.is_set():return
-            if row['id'] not in signals:
-                signal=source_surface_hint(row['path'])
-                if signal:signals[row['id']]=signal
+            signal=source_surface_hint(row['path'])
+            if signal:signals[row['id']]=prefer_signal(signals.get(row['id']),signal)
             self.yield_background()
         changed=False
         with self.lock,self.connect() as db:
@@ -391,6 +376,7 @@ class Archive:
                 before=db.total_changes
                 db.execute("UPDATE chats SET kind=?,kind_evidence=? WHERE id=? AND kind!='codex' AND (kind!=? OR kind_evidence!=?)",(kind,evidence,cid,kind,evidence))
                 changed|=db.total_changes>before
+            db.execute("INSERT OR REPLACE INTO settings VALUES('typeRepairVersion',?)",(json.dumps(VERSION),))
         if changed:self.revision+=1
         if self.ui_cache is not None:
             with self.ui_cache_lock:
@@ -400,9 +386,19 @@ class Archive:
                         c.update(kind=kind,kind_evidence=evidence);self.ui_cache['revision']+=1
 
     def announce_source(self,f,root):
-        if f.suffix.lower()!='.md':return
-        with f.open(encoding='utf-8-sig',errors='replace') as file:head=file.read(8192)
-        parsed=parse_md(head,f)
+        if f.suffix.lower()=='.json':
+            header=source_header(f)
+            cid=header.get('conversation_id') or header.get('id') or infer_id(f)
+            if not header or str(cid).startswith('local-'):return
+            old=self.live_sources.get(cid,{})
+            signal=prefer_signal(surface_signal(header),(old.get('kind','chat'),old.get('kind_evidence','')) if old.get('kind')!='chat' else None)
+            kind,evidence=signal or ('chat','No saved Work/Codex product marker')
+            parsed=dict(old,id=cid,title=header.get('title') or old.get('title') or f.stem,url=header.get('url') or old.get('url') or 'https://chatgpt.com/c/'+cid,created=epoch(header.get('create_time')) or old.get('created',0),updated=epoch(header.get('update_time')) or old.get('updated',0),kind=kind,kind_evidence=evidence,project=header.get('project') if isinstance(header.get('project'),str) else old.get('project',''))
+        elif f.suffix.lower()=='.md':
+            with f.open(encoding='utf-8-sig',errors='replace') as file:head=file.read(8192)
+            parsed=parse_md(head,f)
+            if parsed and self.live_sources.get(parsed['id'],{}).get('path','').lower().endswith('.json'):return
+        else:return
         if not parsed:return
         c={k:v for k,v in parsed.items() if k!='messages'}
         stat=f.stat();c.update(path=str(f),fingerprint=str(stat.st_mtime_ns)+':'+str(stat.st_size),count=0,folder=str(f.parent.relative_to(root)),loaded=False)
@@ -413,10 +409,10 @@ class Archive:
             changed=False
             for c in sources:
                 old=self.ui_cache['chats'].get(c['id'],{})
-                if old.get('loaded') and old.get('path','').lower().endswith('.json') and c.get('path','').lower().endswith('.md'):continue
+                if old.get('path','').lower().endswith('.json') and c.get('path','').lower().endswith('.md') and Path(old['path']).is_file():continue
                 merged={**dict(category='',pinned=0,position=0,alias=''),**old,**c}
-                if old.get('loaded') and not c.get('loaded') and old.get('path')==c.get('path') and old.get('fingerprint')==c.get('fingerprint'):
-                    merged.update(loaded=True,count=old.get('count',0))
+                if old.get('loaded') and not c.get('loaded') and old.get('path')==c.get('path') and (not c.get('fingerprint') or old.get('fingerprint')==c.get('fingerprint')):
+                    merged.update(loaded=True,count=old.get('count',0),fingerprint=old.get('fingerprint',''))
                 if merged!=old:self.ui_cache['chats'][c['id']]=merged;changed=True
             if coverage is not None and coverage!=self.ui_cache['coverage']:self.ui_cache['coverage']=coverage;changed=True
             if changed:self.ui_cache['revision']+=1
@@ -440,8 +436,7 @@ class Archive:
             with self.foreground_lock:
                 if self.reader_pool is None:self.reader_pool=ThreadPoolExecutor(max_workers=2,thread_name_prefix='SelectedChatReader')
         with self.foreground_lock:
-            if self.reader_future and not self.reader_future.running():self.reader_future.cancel()
-            future=self.reader_pool.submit(source_page,cid,path,*args);self.reader_future=future
+            future=self.reader_pool.submit(source_page,cid,path,*args,cache=self.source_reader)
         return future.result(timeout=60)
     def linked_sources(self,cid,requested,seq=None,node_id=None):
         d,path=self.source_data(cid)
@@ -450,6 +445,8 @@ class Archive:
         if node_id and node_id in (d.get('mapping') or {}):exact=source_links(((d['mapping'][node_id].get('message') or {}).get('metadata') or {}))
         elif seq is not None and isinstance(d.get('messages'),list) and 0<=int(seq)<len(d['messages']):
             message=d['messages'][int(seq)];exact=source_links(message.get('metadata') or message)
+        if requested and all(ref in exact for ref in requested[:100]):
+            return {ref:exact[ref] for ref in requested[:100]}
         key=(cid,str(path),path.stat().st_mtime_ns)
         if key not in self.source_link_cache:
             links={}
@@ -466,16 +463,28 @@ class Archive:
             self.source_link_cache={key:links}
         links=self.source_link_cache[key]
         return {ref:exact.get(ref) or links[ref] for ref in requested[:100] if ref in exact or ref in links and len(links[ref])==1}
-    def message_fragment(self,cid,seq,offset=0,leaf=None):
+    def message_fragment(self,cid,seq,offset=0,leaf=None,budget=24576):
         seq=int(seq);offset=max(0,int(offset))
+        budget=max(4096,min(int(budget),131072))
         if leaf:
-            page=self.branch_page(cid,leaf,None,seq,20,True)
-            row=next((m for m in page['messages'] if m['seq']==seq),None)
+            d,path=self.source_data(cid)
+            rows=self.source_reader.rows(cid,path,leaf) if path else []
+            row=next((m for m in rows if m['seq']==seq),None)
         else:
-            page=self.foreground_page(cid,None,seq,20,True)
-            row=next((m for m in page['messages'] if m['seq']==seq),None)
+            c=None
+            if self.ui_cache is not None:
+                with self.ui_cache_lock:c=self.ui_cache['chats'].get(cid)
+            fresh=False
+            if c and Path(c['path']).is_file():
+                st=Path(c['path']).stat();fresh=not c.get('loaded') or c.get('fingerprint')!=f'{st.st_mtime_ns}:{st.st_size}'
+            if fresh:
+                rows=self.source_reader.rows(cid,c['path']);row=next((m for m in rows if m['seq']==seq),None)
+            else:
+                with self.connect() as db:row=db.execute('SELECT text FROM messages WHERE cid=? AND seq=?',(cid,seq)).fetchone()
+                if row is None:
+                    page=self.foreground_page(cid,None,seq,1,True);row=next((m for m in page['messages'] if m['seq']==seq),None)
         if not row:raise ValueError('Saved message not found.')
-        text=row['text'];part=bounded_text(text[offset:],24576);end=offset+len(part)
+        text=row['text'];part=bounded_text(text[offset:offset+budget],budget);end=offset+len(part)
         return dict(text=part,next_offset=end,complete=end>=len(text),length=len(text))
     def catalog_batch(self,offset=0,limit=25,priority=''):
         offset=max(0,int(offset));limit=max(1,min(int(limit),25))
@@ -564,6 +573,7 @@ class Archive:
         self.cancel_event.set();self.cache_stop.set()
         if self.worker and self.worker.is_alive():self.worker.terminate();self.worker.join(timeout=2)
         if self.reader_pool:self.reader_pool.shutdown(wait=False,cancel_futures=True)
+        self.source_reader.clear()
         if self.cache_thread and self.cache_thread.is_alive():self.cache_thread.join(timeout=5)
     def stop_scan(self):
         self.cancel_event.set();self.save_settings_later({'scanPaused':True}) if self.ui_cache is not None else self.save_settings({'scanPaused':True})
@@ -583,7 +593,7 @@ class Archive:
                 if r['cid'] in ids:continue
                 m=json.loads(r['metadata']);ids.add(r['cid'])
                 ready.append(dict(id=r['cid'],title=m.get('title') or Path(r['path']).stem,url=m.get('url') or 'https://chatgpt.com/c/'+r['cid'],
-                    created=epoch(m.get('create_time')),updated=epoch(m.get('update_time')),kind=(surface_signal(m) or (canonical_kind(m.get('chat_kind') or m.get('chatKind')),))[0],
+                    created=epoch(m.get('create_time')),updated=epoch(m.get('update_time')),kind=(surface_signal(m) or (canonical_kind(m.get('chat_kind') or m.get('chatKind')),))[0],kind_evidence=m.get('kind_evidence') or (surface_signal(m) or ('','No saved Work/Codex product marker'))[1],
                     project=m.get('project') if isinstance(m.get('project'),str) else '',path=r['path'],fingerprint='',count=0,folder=str(Path(r['path']).parent),
                     category='',pinned=0,position=0,alias='',loaded=False))
                 ready[-1].update({k:organization.get(r['cid'],{}).get(k,ready[-1][k]) for k in ('category','pinned','position','alias')})
@@ -603,6 +613,8 @@ class Archive:
             if isinstance(value,str) and value:
                 candidate=(manifest.parent/value).resolve()
                 if candidate.is_relative_to(root) and candidate.is_file():path=str(candidate);available=True;break
+        signal=prefer_signal(surface_signal(entry),source_surface_hint(path) if available else None)
+        if signal:entry={**entry,'chat_kind':signal[0],'kind_evidence':signal[1]}
         metadata=json.dumps(entry,ensure_ascii=False)
         with self.lock,self.connect() as db:
             old=db.execute('SELECT metadata,path,available FROM manifest_entries WHERE cid=? AND manifest=?',(cid,str(manifest))).fetchone()
@@ -610,7 +622,7 @@ class Archive:
             db.execute('INSERT OR REPLACE INTO manifest_entries VALUES(?,?,?,?,?)',(cid,str(manifest),metadata,path,int(available)))
         self.revision+=1
         if available:
-            self.live_sources[cid]=dict(id=cid,title=entry.get('title') or Path(path).stem,url=entry.get('url') or 'https://chatgpt.com/c/'+cid,created=epoch(entry.get('create_time')),updated=epoch(entry.get('update_time')),kind=(surface_signal(entry) or (canonical_kind(entry.get('chat_kind') or entry.get('chatKind')),))[0],project=entry.get('project') if isinstance(entry.get('project'),str) else '',path=path,fingerprint='',count=0,folder=str(Path(path).parent.relative_to(root)),loaded=False)
+            self.live_sources[cid]=dict(id=cid,title=entry.get('title') or Path(path).stem,url=entry.get('url') or 'https://chatgpt.com/c/'+cid,created=epoch(entry.get('create_time')),updated=epoch(entry.get('update_time')),kind=signal[0] if signal else 'chat',kind_evidence=signal[1] if signal else 'No saved Work/Codex product marker',project=entry.get('project') if isinstance(entry.get('project'),str) else '',path=path,fingerprint='',count=0,folder=str(Path(path).parent.relative_to(root)),loaded=False)
 
     def organize(self,cid,values):
         with self.lock,self.connect() as db:
@@ -621,6 +633,19 @@ class Archive:
         if self.ui_cache is not None:
             with self.ui_cache_lock:
                 if cid in self.ui_cache['chats']:self.ui_cache['chats'][cid].update(values)
+                self.ui_cache['revision']+=1
+    def organize_many(self,changes):
+        if not isinstance(changes,list) or len(changes)>5000:raise ValueError('Invalid organization batch.')
+        rows=[(str(r['id']),{k:r[k] for k in ('category','pinned','position','alias') if k in r}) for r in changes]
+        with self.lock,self.connect() as db:
+            for cid,values in rows:
+                db.execute('INSERT OR IGNORE INTO organization(cid) VALUES(?)',(cid,))
+                for key,value in values.items():db.execute('UPDATE organization SET '+key+'=? WHERE cid=?',(value,cid))
+        self.revision+=1
+        if self.ui_cache is not None:
+            with self.ui_cache_lock:
+                for cid,values in rows:
+                    if cid in self.ui_cache['chats']:self.ui_cache['chats'][cid].update(values)
                 self.ui_cache['revision']+=1
     def discover_paths(self,start,root,event):
         """Near folders first; yield each candidate without collecting the whole tree."""
@@ -640,7 +665,7 @@ class Archive:
                 if directories>25000:
                     note('Directory limit reached. Choose a narrower export folder.');return
                 depth=len(basepath.relative_to(root).parts)
-                dirs[:]=[d for d in dirs if d not in SKIP and not d.startswith('.') and
+                dirs[:]=[d for d in dirs if d.lower() not in SKIP_LOWER and not d.startswith('.') and
                          not (basepath/d).is_symlink() and str((basepath/d).resolve()) not in visited and
                          (basepath/d).resolve() not in (APP/'web',APP/'tests',APP/'runtime',APP/'models')]
                 dirs.sort(key=lambda d:(not any(w in d.lower() for w in ('export','backup','chat','markdown','json')),d.lower()))
@@ -653,6 +678,7 @@ class Archive:
                     if event.is_set():return
                     f=basepath/name
                     if f.suffix.lower() not in ('.md','.json','.jsonl') or f.is_symlink():continue
+                    if name.lower().endswith('.error-response.json'):continue
                     candidates+=1;self.status['files']=candidates
                     if candidates>100000:
                         note('File limit reached. Choose a narrower export folder.');return
@@ -665,12 +691,8 @@ class Archive:
             if parsed:yield parsed
             return
         if f.suffix.lower()=='.jsonl':
-            rows=[json.loads(line) for line in f.read_text(encoding='utf-8-sig').splitlines() if line.strip()]
-            conv={'id':infer_id(f),'title':f.stem,'product':'codex','messages':[]}
-            for r in rows:
-                if not isinstance(r,dict) or r.get('type') not in ('response_item','event_msg'):continue
-                payload=r.get('payload') or {};role=payload.get('role')
-                if role:conv['messages'].append({'role':role,'text':'\n'.join(x.get('text','') for x in payload.get('content',[]) if isinstance(x,dict))})
+            conv=native_conversation(f.read_text(encoding='utf-8-sig'),f)
+            conv['id']=conv['id'] or infer_id(f)
             raw=[conv] if conv['messages'] else []
         else:
             d=json.loads(f.read_text(encoding='utf-8-sig'));raw=d if isinstance(d,list) else [d]
@@ -726,6 +748,13 @@ class Archive:
                         with self.connect() as db:
                             cached=list(db.execute('SELECT id,fingerprint FROM chats WHERE path=?',(str(f),)))
                             record=db.execute('SELECT fingerprint,status FROM scanned_files WHERE path=?',(str(f),)).fetchone()
+                        # A manifest already points at the preferred JSON. Do
+                        # not parse its potentially huge duplicate Markdown.
+                        if f.suffix.lower()=='.md':
+                            cid=infer_id(f)
+                            with self.connect() as db:preferred=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(cid,cid)).fetchone()
+                            if preferred and Path(preferred['path']).suffix.lower()=='.json' and Path(preferred['path']).is_file():
+                                self.status['processed']+=1;self.status['cached']+=1;continue
                         if not ismeta and record and record['fingerprint']==fp and record['status']=='indexed' and cached and all(r['fingerprint']==fp for r in cached):
                             for r in cached:
                                 if r['id'] not in seen or rank>=seen[r['id']]:seen[r['id']]=rank;self.enrich(r['id'],metadata.get(r['id'],{}))
@@ -773,11 +802,14 @@ class Archive:
         kind,evidence=signal or (None,'')
         project=meta.get('project') or '';project=project.get('title') or project.get('name') or '' if isinstance(project,dict) else project
         with self.lock,self.connect() as db:
-            if kind:db.execute('UPDATE chats SET kind=?,kind_evidence=? WHERE id=?',(kind,evidence,cid))
-            if project:db.execute('UPDATE chats SET project=? WHERE id=?',(project,cid))
+            existing=db.execute('SELECT kind,kind_evidence FROM chats WHERE id=?',(cid,)).fetchone()
+            if existing and kind:
+                kind,evidence=prefer_signal((existing['kind'],existing['kind_evidence']),signal)
+            if kind:db.execute('UPDATE chats SET kind=?,kind_evidence=? WHERE id=? AND (kind IS NOT ? OR kind_evidence IS NOT ?)',(kind,evidence,cid,kind,evidence))
+            if project:db.execute('UPDATE chats SET project=? WHERE id=? AND project IS NOT ?',(project,cid,project))
             for k,mk in [('created','create_time'),('updated','update_time')]:
-                if meta.get(mk):db.execute('UPDATE chats SET '+k+'=? WHERE id=?',(epoch(meta[mk]),cid))
-            if meta.get('url'):db.execute('UPDATE chats SET url=? WHERE id=?',(meta['url'],cid))
+                if meta.get(mk):db.execute('UPDATE chats SET '+k+'=? WHERE id=? AND '+k+' IS NOT ?',(epoch(meta[mk]),cid,epoch(meta[mk])))
+            if meta.get('url'):db.execute('UPDATE chats SET url=? WHERE id=? AND url IS NOT ?',(meta['url'],cid,meta['url']))
             changed=db.total_changes
         if changed:self.revision+=1
         if cid in self.live_sources:
@@ -838,10 +870,7 @@ class Archive:
         else:
             with self.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(cid,cid)).fetchone()
         if not r or Path(r['path']).suffix.lower()!='.json':return {},None
-        path=Path(r['path']);raw=json.loads(path.read_text(encoding='utf-8-sig'))
-        if isinstance(raw,list):raw=next((d for d in raw if str(d.get('conversation_id') or d.get('id'))==cid),{})
-        if isinstance(raw.get('conversation'),dict):raw=raw['conversation']
-        return raw,path
+        path=Path(r['path']);return self.source_reader.raw(cid,path),path
     def choose_version(self,cid,target):
         d,path=self.source_data(cid);mp,children,_=graph_context(d)
         if target not in mp:raise ValueError('This version was not saved in the JSON export.')
@@ -855,21 +884,13 @@ class Archive:
         return max(leaves,key=lambda k:epoch((mp[k].get('message') or {}).get('create_time')),default=target)
     def branch_page(self,cid,leaf,before=None,around=None,limit=100,details=False,after=None):
         d,path=self.source_data(cid)
-        if not path or leaf not in d.get('mapping',{}):raise ValueError('Saved JSON branch was not found.')
-        key=(cid,leaf,path.stat().st_mtime_ns)
-        if key not in self.branch_cache:
-            parsed=parse_json(d,path,leaf);self.branch_cache.clear();self.branch_cache[key]=[dict(m,seq=i,cid=cid) for i,m in enumerate(parsed['messages'])]
-        allrows=[r for r in self.branch_cache[key] if details or r['visible']];limit=max(1,min(int(limit),200))
-        if around is not None:
-            rows=[r for r in allrows if r['seq']>=max(0,int(around)-8)][:limit]
-        elif after is not None:rows=[r for r in allrows if r['seq']>int(after)][:limit]
-        else:rows=[r for r in allrows if before is None or r['seq']<int(before)][-limit:]
-        first=rows[0]['seq'] if rows else 0;last=rows[-1]['seq'] if rows else -1
-        return {'messages':rows,'total':len(allrows),'older':sum(r['seq']<first for r in allrows),'newer':sum(r['seq']>last for r in allrows),'first':first,'leaf':leaf}
-    def search(self,q,mode='smart',cid=None):
+        if not path:raise ValueError('Saved JSON branch was not found.')
+        return dict(page_rows(self.source_reader.rows(cid,path,leaf),before,around,limit,details,after),leaf=leaf)
+    def search(self,q,mode='smart',cid=None,cids=None):
+        if cids is not None and (not cids or cid and cid not in cids):return {'results':[],'mode':mode}
         if mode in ('exact','exact_typo'):
             from phrase_search import phrase_search
-            return phrase_search(self,q,mode=='exact_typo',cid)
+            return phrase_search(self,q,mode=='exact_typo',cid,cids)
         terms=re.findall(r'[^\W_]+',q,flags=re.U)[:24]
         if not terms:return {'results':[],'mode':'keyword'}
         groups=[]
@@ -880,20 +901,21 @@ class Archive:
                     if term.lower() in family:alts.update(family)
             groups.append('('+' OR '.join('"'+t+'"*' for t in sorted(alts))+')')
         query=' AND '.join(groups)
-        condition=' AND cid=?' if cid else ''
+        scope_params=[cid] if cid else sorted(cids) if cids is not None else []
+        condition=' AND cid=?' if cid else ' AND cid IN ('+','.join('?' for _ in scope_params)+')' if cids is not None else ''
         def fetch(query):
             with self.connect() as db:
-                return [dict(r) for r in db.execute("SELECT cid,seq,title,snippet(chunks,3,'','',' … ',42) snippet,bm25(chunks,0,0,5,1) score FROM chunks WHERE chunks MATCH ?"+condition+" ORDER BY score LIMIT 180",(('text : ('+query+')',cid) if cid else ('text : ('+query+')',)))]
+                return [dict(r) for r in db.execute("SELECT cid,seq,title,snippet(chunks,3,'','',' … ',42) snippet,bm25(chunks,0,0,5,1) score FROM chunks WHERE chunks MATCH ?"+condition+" ORDER BY score LIMIT 180",['text : ('+query+')']+scope_params)]
         rows=fetch(query)
         if len(rows)<8:rows+=fetch(' OR '.join(groups))
         exact=[]
         with self.connect() as db:
-            exact=[dict(r) for r in db.execute('SELECT id cid,-1 seq,title,title snippet,-100 score FROM chats WHERE id LIKE ? OR title LIKE ? LIMIT 20',('%'+q+'%','%'+q+'%'))]
+            exact=[dict(r) for r in db.execute('SELECT id cid,-1 seq,title,title snippet,-100 score FROM chats WHERE (id LIKE ? OR title LIKE ?)'+condition.replace('cid','id')+' LIMIT 20',['%'+q+'%','%'+q+'%']+scope_params)]
         with self.connect() as db:
-            title_hits=[dict(r) for r in db.execute("SELECT cid,-1 seq,title,title snippet,bm25(titles) score FROM titles WHERE titles MATCH ?"+condition+" ORDER BY score LIMIT 30",((query,cid) if cid else (query,)))]
+            title_hits=[dict(r) for r in db.execute("SELECT cid,-1 seq,title,title snippet,bm25(titles) score FROM titles WHERE titles MATCH ?"+condition+" ORDER BY score LIMIT 30",[query]+scope_params)]
         catalog_hits=[]
         for c in (list(self.ui_cache['chats'].values()) if self.ui_cache is not None else self.catalog()):
-            if c['loaded'] or (cid and cid!=c['id']):continue
+            if c['loaded'] or (cid and cid!=c['id']) or (cids is not None and c['id'] not in cids):continue
             title=c['title'] or '';words=re.findall(r'[^\W_]+',title.lower(),flags=re.U)
             if q.lower() in c['id'].lower() or q.lower() in title.lower() or all(any(word.startswith(term.lower()) for word in words) for term in terms):
                 catalog_hits.append(dict(cid=c['id'],seq=-1,title=title,snippet=title,score=-100))
@@ -908,7 +930,7 @@ class Archive:
             if not self.semantic_state['ready']:
                 self.request_semantic()
                 return {'results':clean[:60],'mode':used_mode,'notice':self.semantic_state.get('phase') or 'Semantic setup/indexing started in the background. Progress is shown in Settings; text results remain available.'}
-            semantic=self.semantic_search(q)
+            semantic=self.semantic_search(q,cids) if cids is not None else self.semantic_search(q)
             if cid:semantic=[r for r in semantic if r['cid']==cid]
             if mode=='semantic':clean=semantic
             else:
@@ -918,7 +940,7 @@ class Archive:
                         key=(r['cid'],r['seq']);lookup[key]=r;ranks[key]=ranks.get(key,0)+1/(60+i)
                 clean=[lookup[k] for k in sorted(ranks,key=ranks.get,reverse=True)]
             used_mode=mode
-        result={'results':clean[:60],'mode':used_mode}
+        result={'results':clean[:180],'mode':used_mode,'more':len(clean)>180}
         coverage=self.coverage()
         if coverage['available']>coverage['indexed']:result['notice']=f"Content search covers {coverage['indexed']} indexed of {coverage['available']} available chats; titles and IDs are searchable now. See discovery notes for pending or skipped files."
         return result
@@ -965,276 +987,14 @@ class Archive:
         with self.lock,self.connect() as db:
             for (r,part),text,v in zip(batch,texts,vecs):db.execute('INSERT INTO vectors VALUES(?,?,?,?,?)',(r['cid'],r['seq'],part,hashlib.sha256(text.encode()).hexdigest(),np.asarray(v,dtype='float32').tobytes()))
         self.semantic_state['count']+=len(batch)
-    def semantic_search(self,q):
+    def semantic_search(self,q,cids=None):
         import numpy as np
         query=self.semantic_model.encode([q],normalize_embeddings=True,show_progress_bar=False)[0]
         with self.connect() as db:rows=list(db.execute('SELECT cid,seq,part,vector FROM vectors'))
         ranked=[];seen=set()
-        for r in rows:ranked.append((float(np.dot(query,np.frombuffer(r['vector'],dtype='float32'))),r))
+        for r in rows:
+            if cids is None or r['cid'] in cids:ranked.append((float(np.dot(query,np.frombuffer(r['vector'],dtype='float32'))),r))
         ranked.sort(key=lambda x:x[0],reverse=True);out=[]
         with self.connect() as db:
             for score,r in ranked:
                 key=(r['cid'],r['seq'])
-                if key in seen:continue
-                seen.add(key)
-                message=db.execute('SELECT m.text,c.title FROM messages m JOIN chats c ON c.id=m.cid WHERE m.cid=? AND m.seq=?',key).fetchone()
-                if not message:continue
-                parts=chunks(message['text']);part=min(r['part'],len(parts)-1)
-                out.append(dict(cid=r['cid'],seq=r['seq'],title=message['title'],snippet=parts[part][:350],score=score))
-                if len(out)>=60:break
-        return out
-    def asset(self,cid,relative):
-        if self.ui_cache is not None and cid in self.ui_cache['chats']:r={'path':self.ui_cache['chats'][cid]['path']}
-        else:
-            with self.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(cid,cid)).fetchone()
-        if not r:raise FileNotFoundError('Unknown conversation')
-        p=Path(r['path']);rel=urllib.parse.unquote(relative).replace('\\','/')
-        if rel.startswith(('http:','https:','data:','javascript:','file:')):raise ValueError('Only exported local files can be opened here.')
-        roots=[p.parent]
-        settings=self.settings();start=settings.get('scan_start')
-        if start:
-            base=Path(start).resolve()
-            for _ in range(settings.get('scan_up',2)):
-                if base.parent.parent==base.parent:break
-                base=base.parent
-            roots.append(base)
-        f=(p.parent/rel).resolve()
-        if not any(f.is_relative_to(x.resolve()) for x in roots) or not f.is_file():raise FileNotFoundError('Local attachment was not found within the scanned folder.')
-        return f
-
-CONCEPTS=[{'food','nutrition','diet','meal','eating'},{'weather','forecast','rain','temperature','humidity'},
- {'energy','electricity','power','fuel','oil','exergy'},{'scarcity','shortage','collapse','fragility','risk'},
- {'intelligence','cognition','iq','reasoning','psychometrics'},{'export','backup','archive','download'},
- {'roleplay','rp','character','scene','simulation'},{'clothing','clothes','outfit','dress','skirt'},
- {'population','demography','fertility','births','reproduction'},{'search','find','retrieve','recall'},
- {'computer','pc','laptop','windows','bluetooth'},{'money','cost','price','budget','finance'}]
-
-def chunks(text,size=1200):
-    # Overlap protects meaning and phrases at chunk boundaries; small enough for MiniLM.
-    return [text[i:i+size] for i in range(0,len(text),size-200)] or ['']
-
-def reader_worker_init():
-    # Close a reader subprocess if its launcher is forcibly closed.
-    parent=multiprocessing.parent_process()
-    def watch_parent():
-        while True:
-            time.sleep(.5)
-            if parent is not None and not parent.is_alive():os._exit(0)
-    threading.Thread(target=watch_parent,daemon=True).start()
-
-def source_page(cid,path,before=None,around=None,limit=100,details=False,after=None):
-    path=Path(path);limit=max(1,min(int(limit),200))
-    if path.stat().st_size>512*1024*1024:raise ValueError('File over 512 MiB; split the export first.')
-    if path.suffix.lower()=='.md':item=parse_md(path.read_text(encoding='utf-8-sig',errors='replace'),path)
-    else:
-        data=json.loads(path.read_text(encoding='utf-8-sig'))
-        if isinstance(data,list):data=next((x for x in data if str(x.get('conversation_id') or x.get('id'))==cid),{})
-        item=parse_json(data,path)
-    if not item:raise ValueError('This export does not contain readable chat messages.')
-    allrows=[dict(m,seq=i,cid=cid) for i,m in enumerate(item['messages']) if details or m['visible']]
-    if around is not None:rows=[m for m in allrows if m['seq']>=max(0,int(around)-8)][:limit]
-    elif after is not None:rows=[m for m in allrows if m['seq']>int(after)][:limit]
-    else:rows=[m for m in allrows if before is None or m['seq']<int(before)][-limit:]
-    first=rows[0]['seq'] if rows else 0;last=rows[-1]['seq'] if rows else -1
-    return dict(messages=rows,total=len(allrows),older=sum(m['seq']<first for m in allrows),newer=sum(m['seq']>last for m in allrows),first=first)
-
-def bounded_text(text,budget):
-    # JSON escapes and UTF-8 both count toward the body budget.
-    if len(json.dumps(text,ensure_ascii=False).encode())<=budget:return text
-    low=0;high=min(len(text),budget)
-    while low<high:
-        mid=(low+high+1)//2
-        if len(json.dumps(text[:mid],ensure_ascii=False).encode())<=budget:low=mid
-        else:high=mid-1
-    return text[:low]
-
-def bounded_message_page(page,budget=32768,around=None,forward=False):
-    budget=max(4096,min(int(budget),131072))-1024;rows=[]
-    for m in page['messages']:
-        part=bounded_text(m['text'],min(16384,budget//2))
-        if len(part)<len(m['text']):
-            m=dict(m,text=part,text_complete=False,text_next=len(part),text_length=len(m['text']))
-        rows.append(m)
-    page=dict(page,messages=rows)
-    if not rows:return page
-    sizes=[len(json.dumps(m,ensure_ascii=False,separators=(',',':')).encode()) for m in rows]
-    if sum(sizes)<=budget:return page
-    if around is not None:
-        first=min(range(len(rows)),key=lambda i:abs(rows[i]['seq']-int(around)));last=first+1;size=sizes[first]
-        while first>0 or last<len(rows):
-            candidates=[i for i in (first-1,last) if 0<=i<len(rows) and size+sizes[i]<=budget]
-            if not candidates:break
-            i=min(candidates,key=lambda i:abs(rows[i]['seq']-int(around)));size+=sizes[i]
-            if i<first:first=i
-            else:last=i+1
-    elif forward:
-        first=0;last=1;size=sizes[0]
-        while last<len(rows) and size+sizes[last]<=budget:size+=sizes[last];last+=1
-    else:
-        first=len(rows)-1;last=len(rows);size=sizes[first]
-        while first>0 and size+sizes[first-1]<=budget:first-=1;size+=sizes[first]
-    return dict(page,messages=rows[first:last],older=page['older']+first,newer=page['newer']+len(rows)-last,first=rows[first]['seq'])
-
-def scan_worker(data_dir,start,up,updates,cancel,foreground):
-    reader_worker_init()
-    a=Archive(data_dir,background_process=False,initialize=False);a.foreground=foreground;a.cancel_event=cancel
-    done=threading.Event()
-    def report():
-        while not done.wait(.15):
-            try:updates.put_nowait((dict(a.status),a.revision,list(a.live_sources.values()),None))
-            except queue.Full:pass
-    t=threading.Thread(target=report,daemon=True);t.start()
-    try:a.scan(start,up,cancel)
-    finally:
-        done.set();t.join(timeout=1)
-        # Make room for the final status, without blocking shutdown on a full pipe.
-        try:updates.put((dict(a.status),a.revision,list(a.live_sources.values()),a.coverage()),timeout=2)
-        except queue.Full:pass
-        a.close()
-
-class Server(ThreadingHTTPServer):
-    daemon_threads=True
-    request_queue_size=64
-    def __init__(self,address,archive):
-        super().__init__(address,Handler);self.archive=archive;self.token=secrets.token_urlsafe(32)
-        self.transfer_lock=threading.Lock();self.transfers={};self.recent_transfers=[];self.renderer_cache={}
-    def transfer_status(self):
-        with self.transfer_lock:
-            active=[dict(r,elapsed_ms=round((time.monotonic()-r['started'])*1000)) for r in self.transfers.values()]
-            recent=[dict(r) for r in self.recent_transfers[-3:]]
-        for row in active:row.pop('started',None)
-        return dict(active=active[:4],recent=recent)
-
-class Handler(BaseHTTPRequestHandler):
-    def setup(self):
-        super().setup()
-        # Headers followed by a small body should not wait for a delayed ACK.
-        self.connection.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
-    def log_message(self,*a):pass
-    def send(self,body,status=200,ctype='application/json',headers=None):
-        if not isinstance(body,bytes):body=json.dumps(body,ensure_ascii=False,separators=(',',':')).encode()
-        headers=dict(headers or {})
-        if len(body)>1024 and ctype.startswith(('application/json','text/','application/javascript')) and re.search(r'(?:^|,)\s*gzip\s*(?:,|$)',self.headers.get('Accept-Encoding','')):
-            body=gzip.compress(body,compresslevel=3,mtime=0);headers.update({'Content-Encoding':'gzip','Vary':'Accept-Encoding'})
-        self.send_response(status);self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(len(body)))
-        self.send_header('X-Content-Type-Options','nosniff');self.send_header('Cache-Control',headers.pop('Cache-Control','no-store'))
-        self.send_header('Content-Security-Policy',"default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'")
-        for k,v in (headers or {}).items():self.send_header(k,v)
-        endpoint=urllib.parse.urlsplit(self.path).path;track=endpoint in ('/api/state','/api/catalog','/api/messages')
-        key=id(self);record=dict(endpoint=endpoint,bytes=len(body),written=0,encoding=headers.get('Content-Encoding','identity'),started=time.monotonic())
-        if track:
-            with self.server.transfer_lock:self.server.transfers[key]=record
-        try:
-            self.end_headers()
-            for offset in range(0,len(body),16*1024):
-                part=body[offset:offset+16*1024];self.wfile.write(part)
-                if track:
-                    with self.server.transfer_lock:record['written']+=len(part)
-        finally:
-            if track:
-                with self.server.transfer_lock:
-                    self.server.transfers.pop(key,None)
-                    completed=dict(record,elapsed_ms=round((time.monotonic()-record['started'])*1000));completed.pop('started',None)
-                    self.server.recent_transfers.append(completed);self.server.recent_transfers=self.server.recent_transfers[-12:]
-    def authorized(self):
-        host=self.headers.get('Host','').split(':')[0]
-        if host not in ('127.0.0.1','localhost'):return False
-        cookies=http.cookies.SimpleCookie()
-        try:cookies.load(self.headers.get('Cookie',''))
-        except http.cookies.CookieError:return False
-        token=cookies.get('viewer_token');return bool(token and secrets.compare_digest(token.value,self.server.token))
-    def do_GET(self):
-        try:
-            url=urllib.parse.urlsplit(self.path);q={k:v[-1] for k,v in urllib.parse.parse_qs(url.query).items()}
-            if url.path=='/' and secrets.compare_digest(q.get('token',''),self.server.token):
-                self.send(b'',302,'text/plain',{'Location':'/','Set-Cookie':'viewer_token='+self.server.token+'; HttpOnly; SameSite=Strict; Path=/'});return
-            if not self.authorized():self.send({'error':'Open the viewer using START-VIEWER.bat to establish a local session.'},403);return
-            a=self.server.archive
-            if url.path=='/api/health':self.send(dict(ok=True,version=VERSION,pid=os.getpid(),scanning=a.status.get('scanning',False),transfers=self.server.transfer_status()));return
-            if url.path=='/api/state':self.send(a.state(q.get('since'),5,q.get('priority','')));return
-            if url.path=='/api/catalog':self.send(a.catalog_batch(q.get('offset',0),q.get('limit',25),q.get('priority','')));return
-            if url.path=='/api/message-text':
-                with a.foreground_read():self.send(a.message_fragment(q['id'],q['seq'],q.get('offset',0),q.get('leaf')))
-                return
-            if url.path=='/api/renderer':
-                names={'marked':'vendor/marked.js','katex':'vendor/katex/katex.min.js','highlight':'vendor/highlight.js'};name=q.get('name')
-                if name not in names:raise ValueError('Unknown renderer asset')
-                if name not in self.server.renderer_cache:self.server.renderer_cache[name]=(APP/'web'/names[name]).read_text(encoding='utf-8')
-                text=self.server.renderer_cache[name];offset=max(0,int(q.get('offset',0)));part=text[offset:offset+8192].encode()[:8192].decode('utf-8',errors='ignore');end=offset+len(part)
-                self.send(dict(text=part,next=end,done=end>=len(text)));return
-            if url.path=='/api/messages':
-                args=(q['id'],q.get('before'),q.get('around'),q.get('limit',100),q.get('details')=='1',q.get('after'))
-                with a.foreground_read():page=a.branch_page(args[0],q['leaf'],*args[1:]) if q.get('leaf') else a.foreground_page(*args)
-                self.send(bounded_message_page(page,q.get('bytes',32768),q.get('around'),q.get('after') is not None));return
-            if url.path=='/api/search':self.send(a.search(q.get('q',''),q.get('mode','smart'),q.get('id')));return
-            if url.path=='/api/version':
-                leaf=a.choose_version(q['id'],q['target']);d,path=a.source_data(q['id']);parsed=parse_json(d,path,leaf)
-                seq=next((i for i,m in enumerate(parsed['messages']) if m.get('extras',{}).get('node_id')==q['target']),0)
-                self.send({'leaf':leaf,'seq':seq});return
-            if url.path=='/api/branches':
-                d,path=a.source_data(q['id']);mp,children,_=graph_context(d)
-                leaves=[dict(id=k,time=epoch((v.get('message') or {}).get('create_time')),preview=content_text((v.get('message') or {}).get('content',{}))[:160],selected=k==d.get('current_node')) for k,v in mp.items() if not children[k]]
-                self.send({'branches':leaves});return
-            if url.path=='/api/source':
-                if a.ui_cache is not None and q['id'] in a.ui_cache['chats']:r={'path':a.ui_cache['chats'][q['id']]['path']}
-                else:
-                    with a.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(q['id'],q['id'])).fetchone()
-                if not r:raise FileNotFoundError('Unknown conversation')
-                f=Path(r['path']);self.send(f.read_bytes(),ctype='application/octet-stream',headers={'Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(f.name)});return
-            if url.path=='/api/asset':
-                f=a.asset(q['id'],q['path']);ctype=mimetypes.guess_type(f.name)[0] or 'application/octet-stream'
-                # Exported HTML/SVG/code always downloads; never executes in the viewer origin.
-                inline=f.suffix.lower() in ('.png','.jpg','.jpeg','.gif','.webp','.avif','.bmp')
-                self.send(f.read_bytes(),ctype=ctype if inline else 'application/octet-stream',headers={} if inline else {'Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(f.name)});return
-            file=APP/'web'/('index.html' if url.path=='/' else url.path.lstrip('/'))
-            if not file.resolve().is_relative_to((APP/'web').resolve()) or not file.is_file():self.send({'error':'Not found'},404);return
-            self.send(file.read_bytes(),ctype=static_mime(file),headers={'Cache-Control':'private, max-age=86400'} if file.resolve().is_relative_to((APP/'web'/'vendor').resolve()) else None)
-        except Exception as e:self.send({'error':str(e)},400)
-    def do_POST(self):
-        try:
-            origin=self.headers.get('Origin')
-            if not self.authorized() or (origin and origin not in ('http://127.0.0.1:'+str(self.server.server_port),'http://localhost:'+str(self.server.server_port))):self.send({'error':'Unauthorized local request'},403);return
-            length=int(self.headers.get('Content-Length','0'))
-            if length>2*1024*1024:raise ValueError('Request too large')
-            d=json.loads(self.rfile.read(length) or '{}');a=self.server.archive
-            if self.path=='/api/scan':a.request_scan(d['path'],d.get('up',2))
-            elif self.path=='/api/stop-scan':a.stop_scan()
-            elif self.path=='/api/pick-folder':
-                if os.name=='nt':
-                    script="Add-Type -AssemblyName System.Windows.Forms; $f=New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description='Choose your exported chats folder'; $f.ShowNewFolderButton=$false; if($f.ShowDialog() -eq 'OK'){[Console]::OutputEncoding=[Text.Encoding]::UTF8; Write-Output $f.SelectedPath}"
-                    result=subprocess.run(['powershell.exe','-NoProfile','-STA','-Command',script],capture_output=True,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW)
-                    if result.returncode:raise ValueError('Folder dialog could not open. Paste the folder path instead.')
-                    folder=result.stdout.strip().lstrip('\ufeff')
-                else:
-                    import tkinter as tk
-                    from tkinter import filedialog
-                    root=tk.Tk();root.withdraw();root.attributes('-topmost',True);folder=filedialog.askdirectory(title='Choose your exported chats folder',initialdir=d.get('path') or str(APP));root.destroy()
-                self.send({'path':folder});return
-            elif self.path=='/api/settings':a.save_settings(d)
-            elif self.path=='/api/organize':a.organize(d.pop('id'),d)
-            elif self.path=='/api/semantic':a.request_semantic()
-            elif self.path=='/api/source-links':self.send(a.linked_sources(d['id'],d.get('refs',[]),d.get('seq'),d.get('node_id')));return
-            elif self.path=='/api/shutdown':threading.Thread(target=self.server.shutdown,daemon=True).start()
-            else:self.send({'error':'Unknown action'},404);return
-            self.send({'ok':True})
-        except Exception as e:self.send({'error':str(e)},400)
-
-def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--root',default=str(APP));parser.add_argument('--up',type=int,default=None);parser.add_argument('--port',type=int,default=0);parser.add_argument('--no-browser',action='store_true');parser.add_argument('--data-dir',default=str(APP/'.viewer-data'));args=parser.parse_args()
-    a=Archive(args.data_dir);settings=a.settings();a.enable_ui_cache();root=args.root if args.root!=str(APP) else settings.get('scan_start',args.root);up=args.up if args.up is not None else settings.get('scan_up',2)
-    server=Server(('127.0.0.1',args.port),a);url=f'http://127.0.0.1:{server.server_port}/?token={server.token}'
-    (a.data_dir/'session.json').write_text(json.dumps({'url':url,'pid':os.getpid()}))
-    print('Offline Chat Viewer is running. Close this window to stop.\n'+url,flush=True)
-    if not settings.get('scanPaused'):a.request_scan(root,up)
-    else:a.status['phase']='Scan paused · choose a folder or resume'
-    if (APP/'models'/'semantic').is_dir():
-        def semantic_after_scan():
-            while a.status['scanning']:time.sleep(.2)
-            a.build_semantic(allow_setup=False)
-        threading.Thread(target=semantic_after_scan,daemon=True).start()
-    if not args.no_browser:threading.Thread(target=webbrowser.open,args=(url,),daemon=True).start()
-    try:server.serve_forever()
-    except KeyboardInterrupt:pass
-    finally:a.close();server.server_close()
-
-if __name__=='__main__':main()

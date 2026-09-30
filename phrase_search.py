@@ -36,13 +36,22 @@ def spelling_variants(word):
 def stems(words):
     # Use exactly the tokenizer already employed by the saved index. A tiny
     # in-memory database avoids writing to or rebuilding the archive.
-    with sqlite3.connect(':memory:') as db:
+    db=sqlite3.connect(':memory:')
+    try:
         db.execute("CREATE VIRTUAL TABLE probe USING fts5(text,tokenize='porter unicode61')")
         db.execute("CREATE VIRTUAL TABLE terms USING fts5vocab(probe,'row')")
         db.executemany('INSERT INTO probe VALUES(?)',((w,) for w in words))
         return {r[0] for r in db.execute('SELECT term FROM terms')}
+    finally:db.close()
 
 def near_phrase(text,query,typos=True):
+    words=query.strip().split()
+    if words:
+        pattern=r'\s+'.join(re.escape(w) for w in words)
+        if words[0][0].isalnum():pattern=r'(?<!\w)'+pattern
+        if words[-1][-1].isalnum():pattern+=r'(?!\w)'
+        match=re.search(pattern,text,re.I)
+        if match:return 0,'Exact phrase',match.start(),match.end()
     q=' '.join(normal(query).split());collapsed=' '.join(normal(text).split())
     at=collapsed.find(q)
     while at>=0:
@@ -75,29 +84,34 @@ def near_phrase(text,query,typos=True):
                 if j==i and start+j+1<len(tokens) and score+2<=budget:
                     paths[(i,j+1)]=(score+2,completion)
         for (i,j),(score,completion) in paths.items():
-            if i==len(wanted) and (best is None or score<best[0]):best=(score,'Prefix completion' if completion else 'Close phrase',pos)
+            if i==len(wanted) and (best is None or score<best[0]):
+                end_token=tokens[start+j-1]
+                best=(score,'Prefix completion' if completion else 'Close phrase',pos,end_token[1]+len(end_token[0]))
     return best
 
-def phrase_search(archive,q,typos=False,cid=None):
+def phrase_search(archive,q,typos=False,cid=None,cids=None):
     q=q.strip()[:800];words=[normal(m.group()) for m in WORD.finditer(q)][:48]
     if not q:return {'results':[],'mode':'exact + typos' if typos else 'exact phrase'}
     results=[]
     def add(chat,seq,text,matched):
         if not matched:return
-        score,label,pos=matched
-        results.append(dict(cid=chat['id'],seq=seq,title=chat['title'],snippet=text[max(0,pos-70):pos+330],score=score,match=label))
-    for c in archive.catalog():
+        score,label,pos=matched[:3];end=matched[3] if len(matched)>3 else pos+len(q)
+        results.append(dict(cid=chat['id'],seq=seq,title=chat['title'],snippet=text[max(0,pos-70):pos+330],score=score,match=label,matched_text=text[pos:end]))
+    catalog=archive.catalog();updated={c['id']:c.get('updated',0) or 0 for c in catalog}
+    for c in catalog:
         if cid and c['id']!=cid:continue
+        if cids is not None and c['id'] not in cids:continue
         hit=near_phrase(c['title'] or '',q,typos)
         if ' '.join(normal(q).split()) in normal(c['id']):hit=(0,'Exact phrase',0)
         add(c,-1,c['title'] or c['id'],hit)
-    condition=' AND cid=?' if cid else ''
+    params=[cid] if cid else sorted(cids) if cids is not None else []
+    condition=' AND cid=?' if cid else ' AND cid IN ('+','.join('?' for _ in params)+')' if cids is not None else ''
     rows=[]
     if words:
         with archive.connect() as db:
             def fetch(query,limit=360):
-                params=['text : ('+query+')']+([cid] if cid else [])
-                return [dict(r) for r in db.execute('SELECT cid,seq,title,text FROM chunks WHERE chunks MATCH ?'+condition+' ORDER BY bm25(chunks,0,0,0,1) LIMIT '+str(limit),params)]
+                arguments=['text : ('+query+')']+params
+                return [dict(r) for r in db.execute('SELECT cid,seq,title,text FROM chunks WHERE chunks MATCH ?'+condition+' ORDER BY bm25(chunks,0,0,0,1) LIMIT '+str(limit),arguments)]
             rows=fetch('"'+q.replace('"','""')+'"')
             if typos:
                 groups=[]
@@ -124,10 +138,10 @@ def phrase_search(archive,q,typos=False,cid=None):
         if key in seen:continue
         seen.add(key);matched=near_phrase(r['text'],q,typos)
         if matched:add({'id':r['cid'],'title':r['title']},r['seq'],r['text'],matched)
-    results.sort(key=lambda r:(r['score'],r['seq']<0,r['title']))
+    results.sort(key=lambda r:(r['score'],r['seq']<0,-updated.get(r['cid'],0),r['seq']))
     unique={}
     for r in results:unique.setdefault((r['cid'],r['seq']),r)
-    out={'results':list(unique.values())[:60],'mode':'exact + typos' if typos else 'exact phrase'}
+    out={'results':list(unique.values())[:240],'mode':'exact + typos' if typos else 'exact phrase','more':len(unique)>240}
     coverage=archive.coverage()
     if coverage['available']>coverage['indexed']:out['notice']=f"Content search covers {coverage['indexed']} indexed of {coverage['available']} available chats."
     return out

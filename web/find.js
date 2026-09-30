@@ -1,0 +1,31 @@
+'use strict';
+window.ArchiveFind=(()=>{
+ let current=null,local=null,serial=0,controller=null,anchorUntil=0,anchorTimer;
+ const escape=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+ function expression(q){return new RegExp(q.trim().split(/\s+/).map(escape).join('\\s+'),'gi');}
+ function clear(){for(const mark of document.querySelectorAll('mark.find-hit')){const parent=mark.parentNode;mark.replaceWith(document.createTextNode(mark.textContent));parent.normalize();}}
+ function parts(article,includeSources=false){const walker=document.createTreeWalker(article.querySelector('.message-body'),NodeFilter.SHOW_TEXT),nodes=[];let text='',block=null;while(walker.nextNode()){const node=walker.currentNode,parent=node.parentElement;if(parent.closest('button,.code-gutter,.format-status,.katex-mathml,iframe')||(!includeSources&&parent.closest('.widget-source')))continue;const next=parent.closest('p,td,th,li,pre,h1,h2,h3,h4,h5,h6,summary,.plain-text,.widget-title');if(block&&next!==block)text+='\n';block=next;nodes.push({node,start:text.length,end:text.length+node.textContent.length});text+=node.textContent;}return {text,nodes};}
+ function ranges(article,q,includeSources=false){const source=parts(article,includeSources),regex=expression(q),hits=[];let match;while((match=regex.exec(source.text))&&hits.length<1000){hits.push({start:match.index,end:regex.lastIndex});if(!match[0])break;}return {...source,hits};}
+ function reveal(node){for(let parent=node.parentElement;parent;parent=parent.parentElement){if(parent.tagName==='DETAILS')parent.open=true;if(parent.classList.contains('table-wrap')&&parent.hidden){parent.closest('.table-card')?.querySelector('.table-toggle')?.click();}}}
+ function refresh(scroll=false){if(!current||current.cid!==S.selected?.id||current.leaf!==S.leaf)return false;const article=document.querySelector('#messages [data-seq="'+current.seq+'"]');if(!article)return false;clear();let r=ranges(article,current.text);if(!r.hits.length)r=ranges(article,current.text,true);
+  if(!r.hits.length&&current.fallback){const words=current.text.match(/[\p{L}\p{N}_]+/gu)||[];for(const word of words.filter(x=>x.length>2)){r=ranges(article,word);if(r.hits.length)break;}}
+  if(!r.hits.length)return false;const selected=Math.min(current.occurrence||0,r.hits.length-1),segments=[];r.hits.forEach((hit,i)=>{for(const p of r.nodes){const start=Math.max(p.start,hit.start),end=Math.min(p.end,hit.end);if(start<end)segments.push({node:p.node,start:start-p.start,end:end-p.start,selected:i===selected});}});
+  let focus=null;for(const p of segments.reverse()){const after=p.node.splitText(p.end),middle=p.node.splitText(p.start),mark=document.createElement('mark');mark.className='find-hit'+(p.selected?' current-hit':'');middle.replaceWith(mark);mark.append(middle);if(p.selected)focus=mark;}
+  if(focus){reveal(focus);if(scroll){focus.scrollIntoView({block:'center',inline:'center'});article.classList.add('focused');setTimeout(()=>article.classList.remove('focused'),2200);}}return true;
+ }
+ async function jump(cid,seq,text,occurrence=0,fallback=false,leaf=S.leaf){const request=++serial;S.searchNavigating=true;try{
+  if(S.selected?.id!==cid||S.leaf!==leaf||!document.querySelector('#messages [data-seq="'+seq+'"]'))await openChat(cid,seq,false,leaf);
+  if(request!==serial||S.selected?.id!==cid)return;const article=document.querySelector('#messages [data-seq="'+seq+'"]');if(!article)throw Error('This match is in tool details. Turn on Tool details to view it.');article.querySelector('.message-fold').open=true;article.scrollIntoView({block:'center'});
+  const message=S.messages.find(m=>m.seq===seq);if(message?.role==='user'&&message.text_complete===false){await Reader.fullText(message,cid,leaf);article.querySelector('.message-body').textContent=message.text;}else await Reader.ensure(article);
+  if(request!==serial||S.selected?.id!==cid)return;current={cid,seq,text,occurrence,fallback,leaf};anchorUntil=Date.now()+6500;const found=refresh(true);if(!found)toast(fallback?'Related message opened; the exact phrase is not present.':'Message opened. This match is inside the saved app or its source.');await new Promise(r=>requestAnimationFrame(r));if(request===serial)refresh(true);
+ }finally{if(request===serial)S.searchNavigating=false;}}
+ function count(text){document.getElementById('inchat-count').textContent=text;}
+ async function find(direction=0){const q=document.getElementById('inchat-query').value.trim();if(!q||!S.selected)return;controller?.abort();controller=new AbortController();const cid=S.selected.id,leaf=S.leaf,key=[cid,leaf||'',S.details,q].join('|');
+  if(!local||local.key!==key){count('Finding…');let result;try{result=await api('/api/find?'+new URLSearchParams({id:cid,q,details:S.details?'1':'0',...(leaf?{leaf}:{})}),undefined,{controller});}catch(error){count('Find failed · retry');throw error;}if(S.selected?.id!==cid||document.getElementById('inchat-query').value.trim()!==q)return;local={key,hits:result.results,index:-1,truncated:result.truncated};}
+  if(!local.hits.length){count('No matches');clear();current=null;return;}local.index=local.index<0?(direction<0?local.hits.length-1:0):(local.index+(direction||1)+local.hits.length)%local.hits.length;const hit=local.hits[local.index],occurrence=local.hits.slice(0,local.index).filter(h=>h.seq===hit.seq).length;count((local.index+1)+' / '+local.hits.length+(local.truncated?'+':''));await jump(cid,+hit.seq,q,occurrence,false,leaf);
+ }
+ function snippet(text,q){const p=document.createElement('p');let last=0,match;const regex=expression(q);while(q&&(match=regex.exec(text))){p.append(document.createTextNode(text.slice(last,match.index)));const mark=document.createElement('mark');mark.textContent=match[0];p.append(mark);last=regex.lastIndex;}p.append(document.createTextNode(text.slice(last)));return p;}
+ function close(){++serial;controller?.abort();current=null;local=null;clear();S.searchNavigating=false;}
+ const observer=new ResizeObserver(()=>{if(current&&Date.now()<anchorUntil){clearTimeout(anchorTimer);anchorTimer=setTimeout(()=>refresh(true),80);}});observer.observe(document.getElementById('messages'));for(const event of ['wheel','touchstart','pointerdown','keydown'])document.getElementById('scroller').addEventListener(event,()=>anchorUntil=0,{passive:true});
+ return {jump,find,refresh,snippet,close};
+})();

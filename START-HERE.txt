@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.0.11
+OFFLINE CHAT VIEWER v1.0.13
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
@@ -10,7 +10,7 @@ OFFLINE CHAT VIEWER v1.0.11
 5. If needed: Export folders > Browse > choose your export folder > Scan & index.
 
 The selected chat has priority. Other chats are not loaded simultaneously.
-The sidebar appears five rows at a time; recent chats stay warm for quick returns.
+Sidebar rows are reused and updates are batched; recent chats stay warm.
 Startup downloads only five titles, prioritizing the remembered or linked chat.
 Remaining titles download in small batches independently of the active reader.
 Larger responses are compressed. A timed-out batch retries with five titles.
@@ -23,13 +23,16 @@ Scroll up for earlier messages. At the bottom, Continue original chat opens Chat
 Ctrl+K: archive search. Ctrl+F: search in the current chat.
 Use the + button for categories; drag chats onto categories to organize them.
 Settings controls themes, colors, widths, text sizes, and reading positions.
+Chat / Work / Codex counts use saved product/model metadata.
+Free-account Luna is excluded from inferred Work when that plan is saved.
 Saved JSON model metadata produces model badges. Saved alternatives produce version arrows.
 Tables have Fit/Wide, Compact, Collapse, Copy, and an expanded reading view.
 Messages, headings, code, and saved HTML details can collapse and expand.
 Python code keeps indentation and syntax colours; stdout remains monospaced.
 Exported url markers use readable labels and their saved target URLs.
 Equations render locally. Saved source URLs become clickable chips with mini icons.
-Formatting runs in a worker only near the viewport; folder controls stay responsive.
+Formatting runs only near the viewport. Code colouring has a separate worker
+and cannot block tables or the rest of the message. Long text loads in fragments.
 
 No installation or internet is needed for the standard reader on Windows x64.
 Exact + typos search works immediately. Selecting Semantic in search automatically
@@ -37,7 +40,7 @@ sets up the portable CPU engine/model in the background; progress is in Settings
 First semantic setup needs internet. No separate Python installation or restart.
 Your original exports are never modified. Your uploaded chats are not bundled here.
 
-Full instructions: README.md. UI preview: docs/preview.png.
+Full instructions: README.md. UI preview: docs/preview.jpg.
 
 UPDATING: Close the old console, replace the app folder contents, keep .viewer-data,
 and reopen START-VIEWER.bat. Browse to your exports to scan only that folder.
@@ -45,3 +48,11 @@ Pause discovery and Stop current scan preserve already indexed chats.
 
 IF LOADING STALLS: Leave the viewer open, run CHECK-VIEWER.bat, and attach the
 VIEWER-DIAGNOSTICS.json file it creates here. It excludes chat text and tokens.
+
+NEW IN 1.0.13
+Saved charts and self-contained apps render locally. Hover for values.
+Code is folded by default; open it to see syntax colours.
+Find highlights the exact prompt/text; arrow buttons move between matches.
+Archive search keeps results available while opening matches across chats.
+Move group headings with the up/down buttons or drag. The sort button
+inside each group chooses its own order; type filters and pins stay in place.
