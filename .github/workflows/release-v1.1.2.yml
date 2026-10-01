@@ -1,0 +1,166 @@
+name: Release v1.1.2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release-v1.1.2.yml"
+      - ".release-payload/v112.part12"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-v1.1.2
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: "!contains(github.event.head_commit.message || '', '[release-bot]')"
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct and unpack exact v1.1.2 payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .release-payload/v112.part{01..12} | base64 --decode > /tmp/v112.tar.xz
+          mkdir -p /tmp/v112
+          tar -xJf /tmp/v112.tar.xz -C /tmp/v112
+          test -f /tmp/v112/.package-list
+          test -f /tmp/v112/.package-sha256
+
+      - name: Overlay packaged source and verify all package bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, shutil
+
+          src = Path("/tmp/v112")
+          root = Path(".")
+          for p in src.rglob("*"):
+              if not p.is_file() or p.name in {".package-list", ".package-sha256"}:
+                  continue
+              rel = p.relative_to(src)
+              dest = root / rel
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(p, dest)
+
+          manifest = {}
+          for line in (src / ".package-sha256").read_text(encoding="utf-8").splitlines():
+              digest, rel = line.split("  ", 1)
+              manifest[rel] = digest
+
+          paths = (src / ".package-list").read_text(encoding="utf-8").splitlines()
+          if len(paths) != 122 or set(paths) != set(manifest):
+              raise SystemExit(f"package manifest mismatch: {len(paths)} paths / {len(manifest)} hashes")
+
+          for rel in paths:
+              p = root / rel
+              if not p.is_file():
+                  raise SystemExit(f"missing package file: {rel}")
+              got = hashlib.sha256(p.read_bytes()).hexdigest()
+              if got != manifest[rel]:
+                  raise SystemExit(f"hash mismatch: {rel} {got} != {manifest[rel]}")
+
+          readme = (root / "README.md").read_text(encoding="utf-8")
+          if not readme.startswith("# Offline Chat Viewer · v1.1.2"):
+              raise SystemExit("README was not updated to v1.1.2")
+          print(f"Verified {len(paths)} package files exactly.")
+          PY
+
+      - name: Commit v1.1.2 source and README
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .release-payload
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+          else
+            git commit -m "[release-bot] Release v1.1.2 viewer updates"
+            git push origin HEAD:main
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build verified Windows release ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, zipfile
+
+          root = Path(".")
+          src = Path("/tmp/v112")
+          paths = (src / ".package-list").read_text(encoding="utf-8").splitlines()
+          expected = {}
+          for line in (src / ".package-sha256").read_text(encoding="utf-8").splitlines():
+              digest, rel = line.split("  ", 1)
+              expected[rel] = digest
+
+          out = Path("/tmp/Offline-Chat-Viewer-v1.1.2-Windows.zip")
+          with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+              for rel in paths:
+                  z.write(root / rel, f"offline-chat-viewer/{rel}")
+
+          with zipfile.ZipFile(out) as z:
+              actual_names = [n for n in z.namelist() if not n.endswith("/")]
+              wanted = [f"offline-chat-viewer/{r}" for r in paths]
+              if actual_names != wanted:
+                  raise SystemExit("release ZIP path list mismatch")
+              for rel in paths:
+                  data = z.read(f"offline-chat-viewer/{rel}")
+                  got = hashlib.sha256(data).hexdigest()
+                  if got != expected[rel]:
+                      raise SystemExit(f"release ZIP hash mismatch: {rel}")
+
+          digest = hashlib.sha256(out.read_bytes()).hexdigest()
+          Path("/tmp/release-zip.sha256").write_text(digest + "\n", encoding="ascii")
+          print(f"{out.name}: {out.stat().st_size} bytes, sha256 {digest}")
+          PY
+
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP=/tmp/Offline-Chat-Viewer-v1.1.2-Windows.zip
+          ZIP_SHA=$(cat /tmp/release-zip.sha256)
+          cat > /tmp/release-notes.md <<EOF
+          ## Offline Chat Viewer v1.1.2
+
+          Windows x64 portable release.
+
+          ### What's new
+          - Added local archive backups that keep original MD/JSON exports, saved attachments, indexes, organization/settings, and a self-contained archive browser together.
+          - Added Google Drive for desktop backup integration with mounted-drive detection, saved custom destinations, and clearer folder controls.
+          - Improved Windows backup reliability with retry-safe temporary/progress-file handling.
+          - Improved export-folder discovery, modern folder picking, path-copy controls, ZIP-size reporting, and attachment-reference caching.
+          - Refined sidebar filtering/ordering, recurring rescan controls, readable-code presentation, and chart interaction behavior retained from the previous reader improvements.
+
+          ### Upgrade
+          Close the old viewer console, replace the app files, **keep `.viewer-data`**, and reopen `START-VIEWER.bat`.
+
+          The attached ZIP was rebuilt from the exact v1.1.2 package file set and all 122 packaged files were hash-verified before publication.
+
+          **Release ZIP SHA-256:** `$ZIP_SHA`
+          EOF
+
+          if gh release view v1.1.2 >/dev/null 2>&1; then
+            gh release upload v1.1.2 "$ZIP" --clobber
+            gh release edit v1.1.2               --title "Offline Chat Viewer v1.1.2"               --notes-file /tmp/release-notes.md               --latest
+          else
+            gh release create v1.1.2 "$ZIP"               --target "${{ steps.commit.outputs.sha }}"               --title "Offline Chat Viewer v1.1.2"               --notes-file /tmp/release-notes.md               --latest
+          fi
