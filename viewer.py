@@ -13,13 +13,9 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.0.13'
+VERSION = '1.1.2'
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
-SKIP = {'.git','.svn','node_modules','__pycache__','.viewer-data','.venv','venv',
-        'Windows','Program Files','Program Files (x86)','$Recycle.Bin','System Volume Information',
-        'AppData','.cache','.npm','.local','exporter-source',
-        '.semantic-env','.semantic-packages','.semantic-staging','.semantic-cache','.semantic-old'}
-SKIP_LOWER={s.lower() for s in SKIP}|{'attachments','attachment-errors'}
+from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
 ROLE = re.compile(r'^## (You|User|Assistant|ChatGPT|Tool|System)(?: \(([^)]+)\))?\s*$')
 MODEL = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
 STATIC_MIME = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8',
@@ -648,43 +644,7 @@ class Archive:
                     if cid in self.ui_cache['chats']:self.ui_cache['chats'][cid].update(values)
                 self.ui_cache['revision']+=1
     def discover_paths(self,start,root,event):
-        """Near folders first; yield each candidate without collecting the whole tree."""
-        stages=[start];current=start
-        while current!=root:
-            current=current.parent;stages.append(current)
-        visited=set();candidates=0;directories=0
-        def note(error):
-            if len(self.status['errors'])<40:self.status['errors'].append(str(error))
-        for stage in stages:
-            for base,dirs,files in os.walk(stage,followlinks=False,onerror=note):
-                if event.is_set():return
-                basepath=Path(base);key=str(basepath.resolve())
-                if key in visited:dirs.clear();continue
-                visited.add(key);directories+=1
-                self.status['directories']=directories;self.status['current_folder']=str(basepath)
-                if directories>25000:
-                    note('Directory limit reached. Choose a narrower export folder.');return
-                depth=len(basepath.relative_to(root).parts)
-                dirs[:]=[d for d in dirs if d.lower() not in SKIP_LOWER and not d.startswith('.') and
-                         not (basepath/d).is_symlink() and str((basepath/d).resolve()) not in visited and
-                         (basepath/d).resolve() not in (APP/'web',APP/'tests',APP/'runtime',APP/'models')]
-                dirs.sort(key=lambda d:(not any(w in d.lower() for w in ('export','backup','chat','markdown','json')),d.lower()))
-                if depth>=24:
-                    dirs.clear();note('Depth limit reached at '+str(basepath))
-                def priority(name):
-                    lower=name.lower()
-                    return (0 if lower=='conversation-index.json' or 'portable-state' in lower else 1 if lower.endswith('.json') else 2,lower)
-                for name in sorted(files,key=priority):
-                    if event.is_set():return
-                    f=basepath/name
-                    if f.suffix.lower() not in ('.md','.json','.jsonl') or f.is_symlink():continue
-                    if name.lower().endswith('.error-response.json'):continue
-                    candidates+=1;self.status['files']=candidates
-                    if candidates>100000:
-                        note('File limit reached. Choose a narrower export folder.');return
-                    yield f
-                # Give foreground HTTP handlers a turn even in directories with no chats.
-                time.sleep(.002)
+        yield from iter_documents(start,root,event,self.status,APP)
     def read_items(self,f):
         if f.suffix.lower()=='.md':
             parsed=parse_md(f.read_text(encoding='utf-8-sig',errors='replace'),f)
@@ -707,12 +667,7 @@ class Archive:
             if event.is_set():return
             producer=None
             try:
-                p=Path(start).expanduser().resolve()
-                if not p.is_dir():raise ValueError('Choose an existing folder.')
-                root=p
-                for _ in range(max(0,min(int(up),4))):
-                    if root.parent==root or root.parent.parent==root.parent:break
-                    root=root.parent
+                p,root=scan_boundary(start,up)
                 self.status=dict(scanning=True,phase='Discovering and indexing',files=0,indexed=0,processed=0,cached=0,
                                  directories=0,current_folder=str(p),current_file='',errors=[],roots=[str(root)],started=time.time())
                 self.save_settings({'scan_start':str(p),'scan_up':int(up)})
@@ -998,3 +953,335 @@ class Archive:
         with self.connect() as db:
             for score,r in ranked:
                 key=(r['cid'],r['seq'])
+                if key in seen:continue
+                seen.add(key)
+                message=db.execute('SELECT m.text,c.title FROM messages m JOIN chats c ON c.id=m.cid WHERE m.cid=? AND m.seq=?',key).fetchone()
+                if not message:continue
+                parts=chunks(message['text']);part=min(r['part'],len(parts)-1)
+                out.append(dict(cid=r['cid'],seq=r['seq'],title=message['title'],snippet=parts[part][:350],score=score))
+                if len(out)>=60:break
+        return out
+    def asset(self,cid,relative):
+        if self.ui_cache is not None and cid in self.ui_cache['chats']:r={'path':self.ui_cache['chats'][cid]['path']}
+        else:
+            with self.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(cid,cid)).fetchone()
+        if not r:raise FileNotFoundError('Unknown conversation')
+        p=Path(r['path']);rel=urllib.parse.unquote(relative).replace('\\','/')
+        if rel.startswith(('http:','https:','data:','javascript:','file:')):raise ValueError('Only exported local files can be opened here.')
+        roots=[p.parent]
+        imports=self.data_dir/'imports'
+        if p.resolve().is_relative_to(imports.resolve()):roots.append(imports)
+        settings=self.settings();start=settings.get('scan_start')
+        if start:
+            base=Path(start).resolve()
+            for _ in range(settings.get('scan_up',2)):
+                if base.parent.parent==base.parent:break
+                base=base.parent
+            roots.append(base)
+        f=(p.parent/rel).resolve()
+        if not any(f.is_relative_to(x.resolve()) for x in roots) or not f.is_file():raise FileNotFoundError('Local attachment was not found within the scanned folder.')
+        return f
+
+CONCEPTS=[{'food','nutrition','diet','meal','eating'},{'weather','forecast','rain','temperature','humidity'},
+ {'energy','electricity','power','fuel','oil','exergy'},{'scarcity','shortage','collapse','fragility','risk'},
+ {'intelligence','cognition','iq','reasoning','psychometrics'},{'export','backup','archive','download'},
+ {'roleplay','rp','character','scene','simulation'},{'clothing','clothes','outfit','dress','skirt'},
+ {'population','demography','fertility','births','reproduction'},{'search','find','retrieve','recall'},
+ {'computer','pc','laptop','windows','bluetooth'},{'money','cost','price','budget','finance'}]
+
+def chunks(text,size=1200):
+    # Overlap protects meaning and phrases at chunk boundaries; small enough for MiniLM.
+    return [text[i:i+size] for i in range(0,len(text),size-200)] or ['']
+
+def reader_worker_init():
+    # Close a reader subprocess if its launcher is forcibly closed.
+    parent=multiprocessing.parent_process()
+    def watch_parent():
+        while True:
+            time.sleep(.5)
+            if parent is not None and not parent.is_alive():os._exit(0)
+    threading.Thread(target=watch_parent,daemon=True).start()
+
+def source_page(cid,path,before=None,around=None,limit=100,details=False,after=None,cache=None):
+    reader=cache or SourceReader(parse_json,parse_md)
+    return page_rows(reader.rows(cid,path),before,around,limit,details,after)
+
+def bounded_text(text,budget):
+    # JSON escapes and UTF-8 both count toward the body budget.
+    text=text[:budget]
+    if len(json.dumps(text,ensure_ascii=False).encode())<=budget:return text
+    low=0;high=min(len(text),budget)
+    while low<high:
+        mid=(low+high+1)//2
+        if len(json.dumps(text[:mid],ensure_ascii=False).encode())<=budget:low=mid
+        else:high=mid-1
+    return text[:low]
+
+def bounded_message_page(page,budget=32768,around=None,forward=False):
+    budget=max(4096,min(int(budget),131072))-1024;rows=[]
+    for m in page['messages']:
+        part=bounded_text(m['text'],min(16384,budget//2))
+        if len(part)<len(m['text']):
+            m=dict(m,text=part,text_complete=False,text_next=len(part),text_length=len(m['text']))
+        # Large web-search metadata must not defeat the message byte budget.
+        # Resolve omitted references on demand for this exact message.
+        extras=m.get('extras') or {}
+        if extras.get('sources'):
+            refs=set(re.findall(r'(?:turn\d+(?:search|file|news|view|fetch)\d+)',part))
+            sources={k:v for k,v in extras['sources'].items() if k in refs}
+            if len(json.dumps(sources,ensure_ascii=False).encode())>budget//4:sources={}
+            m=dict(m,extras={**extras,'sources':sources})
+        rows.append(m)
+    page=dict(page,messages=rows)
+    if not rows:return page
+    sizes=[len(json.dumps(m,ensure_ascii=False,separators=(',',':')).encode()) for m in rows]
+    if sum(sizes)<=budget:return page
+    if around is not None:
+        first=min(range(len(rows)),key=lambda i:abs(rows[i]['seq']-int(around)));last=first+1;size=sizes[first]
+        while first>0 or last<len(rows):
+            candidates=[i for i in (first-1,last) if 0<=i<len(rows) and size+sizes[i]<=budget]
+            if not candidates:break
+            i=min(candidates,key=lambda i:abs(rows[i]['seq']-int(around)));size+=sizes[i]
+            if i<first:first=i
+            else:last=i+1
+    elif forward:
+        first=0;last=1;size=sizes[0]
+        while last<len(rows) and size+sizes[last]<=budget:size+=sizes[last];last+=1
+    else:
+        first=len(rows)-1;last=len(rows);size=sizes[first]
+        while first>0 and size+sizes[first-1]<=budget:first-=1;size+=sizes[first]
+    return dict(page,messages=rows[first:last],older=page['older']+first,newer=page['newer']+len(rows)-last,first=rows[first]['seq'])
+
+def scan_worker(data_dir,start,up,updates,cancel,foreground):
+    reader_worker_init()
+    a=Archive(data_dir,background_process=False,initialize=False);a.foreground=foreground;a.cancel_event=cancel
+    done=threading.Event()
+    def report():
+        while not done.wait(.15):
+            try:updates.put_nowait((dict(a.status),a.revision,list(a.live_sources.values()),None))
+            except queue.Full:pass
+    t=threading.Thread(target=report,daemon=True);t.start()
+    try:a.scan(start,up,cancel)
+    finally:
+        done.set();t.join(timeout=1)
+        # Make room for the final status, without blocking shutdown on a full pipe.
+        # Discovery headers cannot tell whether a file was already indexed.
+        # Reconcile the final catalog once in the background so rescans never
+        # leave cached conversations marked as unindexed.
+        final={**a.live_sources,**{c['id']:c for c in a.catalog()}}
+        try:updates.put((dict(a.status),a.revision,list(final.values()),a.coverage()),timeout=2)
+        except queue.Full:pass
+        a.close()
+
+class Server(ThreadingHTTPServer):
+    daemon_threads=True
+    request_queue_size=64
+    def __init__(self,address,archive):
+        super().__init__(address,Handler);self.archive=archive;self.token=secrets.token_urlsafe(32)
+        self.cookie_name='viewer_token_'+str(self.server_port)
+        self.transfer_lock=threading.Lock();self.transfers={};self.recent_transfers=[];self.renderer_cache={}
+        from archive_backup import BackupManager
+        self.backup=BackupManager(archive,APP)
+    def transfer_status(self):
+        with self.transfer_lock:
+            active=[dict(r,elapsed_ms=round((time.monotonic()-r['started'])*1000)) for r in self.transfers.values()]
+            recent=[dict(r) for r in self.recent_transfers[-3:]]
+        for row in active:row.pop('started',None)
+        return dict(active=active[:4],recent=recent)
+
+class Handler(BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        # Headers followed by a small body should not wait for a delayed ACK.
+        self.connection.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
+    def log_message(self,*a):pass
+    def send(self,body,status=200,ctype='application/json',headers=None):
+        if not isinstance(body,bytes):body=json.dumps(body,ensure_ascii=False,separators=(',',':')).encode()
+        headers=dict(headers or {})
+        if len(body)>1024 and ctype.startswith(('application/json','text/','application/javascript')) and re.search(r'(?:^|,)\s*gzip\s*(?:,|$)',self.headers.get('Accept-Encoding','')):
+            body=gzip.compress(body,compresslevel=3,mtime=0);headers.update({'Content-Encoding':'gzip','Vary':'Accept-Encoding'})
+        self.send_response(status);self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(len(body)))
+        self.send_header('X-Content-Type-Options','nosniff');self.send_header('Cache-Control',headers.pop('Cache-Control','no-store'))
+        self.send_header('Content-Security-Policy',headers.pop('Content-Security-Policy',"default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"))
+        for k,v in (headers or {}).items():self.send_header(k,v)
+        endpoint=urllib.parse.urlsplit(self.path).path;track=endpoint in ('/api/state','/api/catalog','/api/messages')
+        key=id(self);record=dict(endpoint=endpoint,bytes=len(body),written=0,encoding=headers.get('Content-Encoding','identity'),started=time.monotonic())
+        if track:
+            with self.server.transfer_lock:self.server.transfers[key]=record
+        try:
+            self.end_headers()
+            for offset in range(0,len(body),16*1024):
+                part=body[offset:offset+16*1024];self.wfile.write(part)
+                if track:
+                    with self.server.transfer_lock:record['written']+=len(part)
+        finally:
+            if track:
+                with self.server.transfer_lock:
+                    self.server.transfers.pop(key,None)
+                    completed=dict(record,elapsed_ms=round((time.monotonic()-record['started'])*1000));completed.pop('started',None)
+                    self.server.recent_transfers.append(completed);self.server.recent_transfers=self.server.recent_transfers[-12:]
+    def authorized(self):
+        host=self.headers.get('Host','').split(':')[0]
+        if host not in ('127.0.0.1','localhost'):return False
+        cookies=http.cookies.SimpleCookie()
+        try:cookies.load(self.headers.get('Cookie',''))
+        except http.cookies.CookieError:return False
+        token=cookies.get(self.server.cookie_name) or cookies.get('viewer_token')
+        return bool(token and secrets.compare_digest(token.value,self.server.token))
+    def do_GET(self):
+        try:
+            url=urllib.parse.urlsplit(self.path);q={k:v[-1] for k,v in urllib.parse.parse_qs(url.query).items()}
+            if url.path=='/' and secrets.compare_digest(q.get('token',''),self.server.token):
+                self.send(b'',302,'text/plain',{'Location':'/','Set-Cookie':self.server.cookie_name+'='+self.server.token+'; HttpOnly; SameSite=Strict; Path=/'});return
+            if not self.authorized():self.send({'error':'Open the viewer using START-VIEWER.bat to establish a local session.'},403);return
+            a=self.server.archive
+            if url.path=='/api/backup/detect':
+                from folder_tools import quick_setup
+                self.send(quick_setup(a.settings(),APP,refresh=q.get('refresh')=='1'));return
+            if url.path=='/api/backup/status':self.send(self.server.backup.status());return
+            if url.path=='/api/backup/preview':self.send(self.server.backup.preview());return
+            if url.path=='/api/backup/folders':self.send({'folders':self.server.backup.drive.folders(q.get('parent','root'))});return
+            if url.path=='/api/backup/download':
+                if q.get('mode') not in ('full','progress'):raise ValueError('Choose a full or progress backup.')
+                path=self.server.backup.local_path(q['mode'])
+                with path.open('rb') as file:
+                    self.send_response(200);self.send_header('Content-Type','application/zip');self.send_header('Content-Length',str(path.stat().st_size));self.send_header('Content-Disposition','attachment; filename="'+path.name+'"');self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.end_headers()
+                    while part:=file.read(128*1024):self.wfile.write(part)
+                return
+            if url.path=='/api/health':self.send(dict(ok=True,version=VERSION,pid=os.getpid(),scanning=a.status.get('scanning',False),transfers=self.server.transfer_status()));return
+            if url.path=='/api/state':self.send(a.state(q.get('since'),5,q.get('priority','')));return
+            if url.path=='/api/catalog':self.send(a.catalog_batch(q.get('offset',0),q.get('limit',25),q.get('priority','')));return
+            if url.path=='/api/message-text':
+                with a.foreground_read():self.send(a.message_fragment(q['id'],q['seq'],q.get('offset',0),q.get('leaf'),q.get('bytes',24576)))
+                return
+            if url.path=='/api/renderer':
+                names={'marked':'vendor/marked.js','katex':'vendor/katex/katex.min.js','highlight':'vendor/highlight.js'};name=q.get('name')
+                if name not in names:raise ValueError('Unknown renderer asset')
+                if name not in self.server.renderer_cache:self.server.renderer_cache[name]=(APP/'web'/names[name]).read_text(encoding='utf-8')
+                text=self.server.renderer_cache[name];offset=max(0,int(q.get('offset',0)));part=text[offset:offset+8192].encode()[:8192].decode('utf-8',errors='ignore');end=offset+len(part)
+                self.send(dict(text=part,next=end,done=end>=len(text)));return
+            if url.path=='/api/messages':
+                args=(q['id'],q.get('before'),q.get('around'),q.get('limit',100),q.get('details')=='1',q.get('after'))
+                with a.foreground_read():page=a.branch_page(args[0],q['leaf'],*args[1:]) if q.get('leaf') else a.foreground_page(*args)
+                self.send(bounded_message_page(page,q.get('bytes',32768),q.get('around'),q.get('after') is not None));return
+            if url.path=='/api/search':
+                scope=None
+                if q.get('type','all')!='all' or q.get('category','all')!='all':
+                    overrides=a.settings().get('kindOverrides') or {}
+                    scope={c['id'] for c in a.catalog() if (q.get('type','all')=='all' or canonical_kind(overrides.get(c['id']) or c['kind'])==q['type']) and (q.get('category','all')=='all' or (c.get('category') or '')==q['category'])}
+                result=a.search(q.get('q',''),q.get('mode','smart'),q.get('id'),scope)
+                with a.connect() as db:
+                    for hit in result['results']:
+                        row=db.execute('SELECT role,time FROM messages WHERE cid=? AND seq=?',(hit['cid'],hit['seq'])).fetchone()
+                        if row:hit.update(dict(row))
+                self.send(result);return
+            if url.path=='/api/find':
+                from find_text import conversation_matches
+                with a.foreground_read():self.send(conversation_matches(a,q['id'],q.get('q',''),q.get('leaf'),q.get('details')=='1'))
+                return
+            if url.path=='/api/app-frame':
+                from saved_widgets import application_frame
+                with a.foreground_read():
+                    with a.connect() as db:row=db.execute('SELECT text FROM messages WHERE cid=? AND seq=?',(q['id'],int(q['seq']))).fetchone()
+                    if q.get('leaf') or not row:
+                        _,path=a.source_data(q['id']);rows=a.source_reader.rows(q['id'],path,q.get('leaf'));row=next((r for r in rows if r['seq']==int(q['seq'])),None)
+                    if not row:raise ValueError('Saved app message was not found.')
+                    html=application_frame(row['text'],q.get('widget',0),(APP/'web/artifact.css').read_text(encoding='utf-8'),{k:q.get(k,'') for k in ('bg','text','muted','border','card','accent')},q.get('nonce',''))
+                self.send(html,ctype='text/html; charset=utf-8',headers={'Content-Security-Policy':"sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; frame-ancestors 'self'; base-uri 'none'"});return
+            if url.path=='/api/version':
+                leaf=a.choose_version(q['id'],q['target']);d,path=a.source_data(q['id']);parsed=parse_json(d,path,leaf)
+                seq=next((i for i,m in enumerate(parsed['messages']) if m.get('extras',{}).get('node_id')==q['target']),0)
+                self.send({'leaf':leaf,'seq':seq});return
+            if url.path=='/api/branches':
+                d,path=a.source_data(q['id']);mp,children,_=graph_context(d)
+                leaves=[dict(id=k,time=epoch((v.get('message') or {}).get('create_time')),preview=content_text((v.get('message') or {}).get('content',{}))[:160],selected=k==d.get('current_node')) for k,v in mp.items() if not children[k]]
+                self.send({'branches':leaves});return
+            if url.path=='/api/source':
+                if a.ui_cache is not None and q['id'] in a.ui_cache['chats']:r={'path':a.ui_cache['chats'][q['id']]['path']}
+                else:
+                    with a.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(q['id'],q['id'])).fetchone()
+                if not r:raise FileNotFoundError('Unknown conversation')
+                f=Path(r['path']);self.send(f.read_bytes(),ctype='application/octet-stream',headers={'Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(f.name)});return
+            if url.path=='/api/asset':
+                f=a.asset(q['id'],q['path']);ctype=mimetypes.guess_type(f.name)[0] or 'application/octet-stream'
+                # Exported HTML/SVG/code always downloads; never executes in the viewer origin.
+                inline=f.suffix.lower() in ('.png','.jpg','.jpeg','.gif','.webp','.avif','.bmp')
+                self.send(f.read_bytes(),ctype=ctype if inline else 'application/octet-stream',headers={} if inline else {'Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(f.name)});return
+            file=APP/'web'/('index.html' if url.path=='/' else url.path.lstrip('/'))
+            if not file.resolve().is_relative_to((APP/'web').resolve()) or not file.is_file():self.send({'error':'Not found'},404);return
+            self.send(file.read_bytes(),ctype=static_mime(file),headers={'Cache-Control':'private, max-age=86400'} if file.resolve().is_relative_to((APP/'web'/'vendor').resolve()) else None)
+        except Exception as e:self.send({'error':str(e)},400)
+    def do_POST(self):
+        try:
+            origin=self.headers.get('Origin')
+            if not self.authorized() or (origin and origin not in ('http://127.0.0.1:'+str(self.server.server_port),'http://localhost:'+str(self.server.server_port))):self.send({'error':'Unauthorized local request'},403);return
+            length=int(self.headers.get('Content-Length','0'))
+            if length>2*1024*1024:raise ValueError('Request too large')
+            d=json.loads(self.rfile.read(length) or '{}');a=self.server.archive
+            if self.path=='/api/scan':a.request_scan(d['path'],d.get('up',2))
+            elif self.path=='/api/stop-scan':a.stop_scan()
+            elif self.path=='/api/pick-folder':
+                if os.name=='nt':
+                    from folder_tools import pick_folder,drive_suggestion
+                    hint=d.get('path') or (drive_suggestion().get('root') if d.get('kind')=='drive' else '') or (str(APP/'Backups') if d.get('destination') else a.settings().get('scan_start') or str(APP))
+                    folder=pick_folder(hint,'Choose a backup destination folder' if d.get('destination') else 'Choose your exported chats folder')
+                else:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root=tk.Tk();root.withdraw();root.attributes('-topmost',True);folder=filedialog.askdirectory(title='Choose your exported chats folder',initialdir=d.get('path') or str(APP));root.destroy()
+                self.send({'path':folder});return
+            elif self.path=='/api/settings':a.save_settings(d)
+            elif self.path=='/api/backup/config':self.send(self.server.backup.save_config(d));return
+            elif self.path=='/api/backup/open-local':self.send(self.server.backup.open_local(d.get('path')));return
+            elif self.path=='/api/backup/client':self.send(self.server.backup.drive.configure(d));return
+            elif self.path=='/api/backup/connect':self.send(self.server.backup.drive.connect());return
+            elif self.path=='/api/backup/disconnect':self.server.backup.drive.disconnect()
+            elif self.path=='/api/backup/create-folder':self.send(self.server.backup.drive.create_folder(d.get('name','Chat archive backups'),d.get('parent','root')));return
+            elif self.path=='/api/backup/select-folder':
+                folder=self.server.backup.drive.folder(d.get('id',''));self.send(self.server.backup.save_config({'folder_id':folder['id'],'folder_name':folder['name']}));return
+            elif self.path=='/api/backup/run':self.send(self.server.backup.start(upload=d.get('upload',True)));return
+            elif self.path=='/api/backup/cancel':self.server.backup.cancel.set()
+            elif self.path=='/api/backup/schedule':self.send(self.server.backup.schedule(bool(d.get('enabled'))));return
+            elif self.path=='/api/backup/import':self.send(self.server.backup.import_zip(d.get('path',''),bool(d.get('restore_settings'))));return
+            elif self.path=='/api/pick-archive':
+                if os.name=='nt':
+                    script="Add-Type -AssemblyName System.Windows.Forms; $f=New-Object System.Windows.Forms.OpenFileDialog; $f.Title='Choose an archive ZIP'; $f.Filter='ZIP archives (*.zip)|*.zip'; if($f.ShowDialog() -eq 'OK'){[Console]::OutputEncoding=[Text.Encoding]::UTF8; Write-Output $f.FileName}"
+                    result=subprocess.run(['powershell.exe','-NoProfile','-STA','-Command',script],capture_output=True,text=True,encoding='utf-8',creationflags=subprocess.CREATE_NO_WINDOW);path=result.stdout.strip().lstrip('\ufeff')
+                else:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root=tk.Tk();root.withdraw();path=filedialog.askopenfilename(title='Choose an archive ZIP',filetypes=[('ZIP archives','*.zip')]);root.destroy()
+                self.send({'path':path});return
+            elif self.path=='/api/organize':a.organize(d.pop('id'),d)
+            elif self.path=='/api/organize-many':a.organize_many(d.get('changes'))
+            elif self.path=='/api/semantic':a.request_semantic()
+            elif self.path=='/api/source-links':self.send(a.linked_sources(d['id'],d.get('refs',[]),d.get('seq'),d.get('node_id')));return
+            elif self.path=='/api/shutdown':threading.Thread(target=self.server.shutdown,daemon=True).start()
+            else:self.send({'error':'Unknown action'},404);return
+            self.send({'ok':True})
+        except Exception as e:self.send({'error':str(e)},400)
+
+def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--root',default=str(APP));parser.add_argument('--up',type=int,default=None);parser.add_argument('--port',type=int,default=0);parser.add_argument('--no-browser',action='store_true');parser.add_argument('--data-dir',default=str(APP/'.viewer-data'));args=parser.parse_args()
+    a=Archive(args.data_dir);settings=a.settings()
+    if settings.get('steadySidebarPolicy')!=1:
+        a.save_settings({'autoRefresh':False,'steadySidebarPolicy':1});settings=a.settings()
+    a.enable_ui_cache();root=args.root if args.root!=str(APP) else settings.get('scan_start',args.root);up=args.up if args.up is not None else settings.get('scan_up',2)
+    server=Server(('127.0.0.1',args.port),a);url=f'http://127.0.0.1:{server.server_port}/?token={server.token}'
+    server.backup.start_scheduler()
+    (a.data_dir/'session.json').write_text(json.dumps({'url':url,'pid':os.getpid()}))
+    print('Offline Chat Viewer is running. Close this window to stop.\n'+url,flush=True)
+    if not settings.get('scanPaused') and (settings.get('scan_start') or args.root!=str(APP)):a.request_scan(root,up)
+    elif not settings.get('scan_start') and args.root==str(APP):a.status['phase']='Choose an export folder to begin'
+    else:a.status['phase']='Scan paused · choose a folder or resume'
+    if (APP/'models'/'semantic').is_dir():
+        def semantic_after_scan():
+            while a.status['scanning']:time.sleep(.2)
+            a.build_semantic(allow_setup=False)
+        threading.Thread(target=semantic_after_scan,daemon=True).start()
+    if not args.no_browser:threading.Thread(target=webbrowser.open,args=(url,),daemon=True).start()
+    try:server.serve_forever()
+    except KeyboardInterrupt:pass
+    finally:server.backup.close();a.close();server.server_close()
+
+if __name__=='__main__':main()

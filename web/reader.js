@@ -8,7 +8,7 @@ window.Reader=(()=>{
  function stopColour(){clearTimeout(colourTimer);if(colourActive){colourActive.resolve(null);colourActive=null;}for(const job of colourJobs.splice(0))job.resolve(null);colourWorker?.terminate();colourWorker=null;colourReady=false;}
  function runColour(){
   if(!colourJobs.length||colourActive)return;
-  if(!colourWorker){colourWorker=new Worker('highlight-worker.js?v=1.0.13');colourTimer=setTimeout(stopColour,5000);colourWorker.onerror=stopColour;colourWorker.onmessage=e=>{if(e.data.ready){clearTimeout(colourTimer);colourReady=true;runColour();return;}if(e.data.error&&!e.data.id){stopColour();return;}if(colourActive&&e.data.id===colourActive.id){clearTimeout(colourTimer);const job=colourActive;colourActive=null;job.resolve(e.data.html||null);runColour();}};}
+  if(!colourWorker){colourWorker=new Worker('highlight-worker.js?v=1.1.2');colourTimer=setTimeout(stopColour,5000);colourWorker.onerror=stopColour;colourWorker.onmessage=e=>{if(e.data.ready){clearTimeout(colourTimer);colourReady=true;runColour();return;}if(e.data.error&&!e.data.id){stopColour();return;}if(colourActive&&e.data.id===colourActive.id){clearTimeout(colourTimer);const job=colourActive;colourActive=null;job.resolve(e.data.html||null);runColour();}};}
   if(!colourReady)return;
   while(colourJobs.length&&!colourJobs[0].root.isConnected)colourJobs.shift().resolve(null);
   if(!colourJobs.length)return;colourActive=colourJobs.shift();colourTimer=setTimeout(stopColour,1200);colourWorker.postMessage({id:colourActive.id,text:colourActive.text,language:colourActive.language});
@@ -22,7 +22,7 @@ window.Reader=(()=>{
   else for(const job of jobs.splice(0))job.reject(Error('A different conversation was opened.'));
   stopColour();
  }
- function preload(){if(worker)return;worker=new Worker('render-worker.js?v=1.0.13');startupTimer=setTimeout(()=>failWorker('Formatting renderer startup timed out.'),15000);
+ function preload(){if(worker)return;worker=new Worker('render-worker.js?v=1.1.2');startupTimer=setTimeout(()=>failWorker('Formatting renderer startup timed out.'),15000);
   worker.onmessage=e=>{if(e.data.ready){clearTimeout(startupTimer);ready=true;run();return;}if(e.data.startupError){failWorker(e.data.startupError);return;}
    if(active&&e.data.id===active.id){const job=active;clearTimeout(job.timer);active=null;e.data.error?job.reject(Error(e.data.error)):job.resolve(e.data.html);run();}};
   worker.onerror=()=>failWorker('Formatting worker could not load.');
@@ -31,7 +31,7 @@ window.Reader=(()=>{
  function parse(text,root,mode='markdown',language='plaintext'){return new Promise((resolve,reject)=>{const job={id:++serial,text,root,mode,language,resolve,reject};if(mode==='highlight')jobs.push(job);else if(root.dataset.priority)jobs.unshift(job);else{const enhancement=jobs.findIndex(j=>j.mode==='highlight');enhancement<0?jobs.push(job):jobs.splice(enhancement,0,job);}run();});}
  function enhanceCode(scope){if(!scope)return;
   for(const code of scope.querySelectorAll('.code-editor pre code[data-language]')){if(code.dataset.highlighted||code.dataset.highlighting||!code.isConnected)continue;
-   const root=code.closest('.reader-content'),text=code.textContent,language=code.dataset.language;if(!root||text.length>65536)continue;const rect=code.getBoundingClientRect(),view=document.getElementById('scroller').getBoundingClientRect();if(!rect.height||rect.bottom<view.top-150||rect.top>view.bottom+150){colourObserver.observe(code);continue;}code.dataset.highlighting='1';
+   const root=code.closest('.reader-content'),text=code.textContent,language=code.dataset.language;if(!root||text.length>65536||code.closest('.text-fold'))continue;const rect=code.getBoundingClientRect(),view=document.getElementById('scroller').getBoundingClientRect();if(!rect.height||rect.bottom<view.top-150||rect.top>view.bottom+150){colourObserver.observe(code);continue;}code.dataset.highlighting='1';
    colour(text,root,language).then(html=>{if(!code.isConnected||code.textContent!==text)return;if(html){const safe=sanitize(html,root._readerMessage?.[1]||'');code.replaceChildren(...safe.childNodes);}if(html){code.dataset.highlighted='1';colourObserver.unobserve(code);window.ArchiveFind?.refresh(false);}}).catch(()=>{}).finally(()=>{delete code.dataset.highlighting;});
   }
  }
@@ -68,12 +68,12 @@ window.Reader=(()=>{
  function headings(root,key){const original=[...root.childNodes],fragment=document.createDocumentFragment(),stack=[{level:0,body:fragment}];let index=0;for(const n of original){if(/^H[1-6]$/.test(n.nodeName)){const level=+n.nodeName[1];while(stack.length>1&&stack.at(-1).level>=level)stack.pop();const details=node('details','section-fold'),summary=node('summary','section-summary'),body=node('div','section-body');summary.append(n);details.append(summary,body);foldState(details,key+'|heading:'+index++);stack.at(-1).body.append(details);stack.push({level,body});}else stack.at(-1).body.append(n);}root.replaceChildren(fragment);}
  function codeBlocks(root,key,presentation={},sourceText){let index=0;for(const pre of [...root.querySelectorAll('pre')]){
   const code=pre.querySelector('code'),display=code?.textContent??pre.textContent,isJson=presentation.kind==='code'&&String(presentation.language||'').toLowerCase()==='json'&&typeof sourceText==='string',raw=isJson?sourceText:display,details=node('details','code-fold'),summary=node('summary','code-header'),lang=code?.dataset.language||'Text',copy=node('button','code-copy','Copy'),codeKey=key+'|code:'+index++;
-  copy.title='Copy code';copy.onclick=async e=>{e.preventDefault();e.stopPropagation();await navigator.clipboard.writeText(raw);copy.textContent='Copied';setTimeout(()=>copy.textContent='Copy',1500);};
-  const displayLanguage={python:'Python',javascript:'JavaScript',typescript:'TypeScript',json:'JSON',bash:'Shell',shell:'Shell',plaintext:'Text'}[lang.toLowerCase()]||lang;
+  copy.title='Copy saved block';copy.onclick=async e=>{e.preventDefault();e.stopPropagation();await navigator.clipboard.writeText(raw);copy.textContent='Copied';setTimeout(()=>copy.textContent='Copy',1500);};
+  const readable=CodePresentation.readable(code?.dataset.language,display,presentation.kind),displayLanguage=readable?'Text':({python:'Python',javascript:'JavaScript',typescript:'TypeScript',json:'JSON',bash:'Shell',shell:'Shell',plaintext:'Text'}[lang.toLowerCase()]||lang);if(readable){details.classList.add('text-fold');if(code){code.textContent=display;delete code.dataset.language;}}
   if(presentation.kind==='output'){details.classList.add('output-fold');pre.classList.add('execution-output');}
-  summary.append(node('span','code-symbol',presentation.kind==='output'?'›_':'‹/›'),node('strong','code-language',presentation.kind==='output'?(presentation.label||'STDOUT/STDERR'):displayLanguage),node('span','code-lines',display.split('\n').length+' lines'));
-  const editor=node('div','code-editor');editor.tabIndex=0;editor.setAttribute('role','region');editor.setAttribute('aria-label',displayLanguage+' code');
-  if(presentation.kind!=='output'){
+  summary.append(node('span','code-symbol',readable?'≡':presentation.kind==='output'?'›_':'‹/›'),node('strong','code-language',presentation.kind==='output'?(presentation.label||'STDOUT/STDERR'):displayLanguage),node('span','code-lines',display.split('\n').length+' lines'));
+  const editor=node('div','code-editor');editor.tabIndex=0;editor.setAttribute('role','region');editor.setAttribute('aria-label',readable?'Saved text':displayLanguage+' code');
+  if(presentation.kind!=='output'&&!readable){
    const gutter=node('div','code-gutter',display.split('\n').map((_,i)=>i+1).join('\n')),wrap=node('button','code-wrap','Wrap');gutter.setAttribute('aria-hidden','true');editor.append(gutter);
    const applyWrap=value=>{editor.classList.toggle('wrap-code',value);wrap.setAttribute('aria-pressed',String(value));states.set(codeKey+'|wrap',value);};applyWrap(states.get(codeKey+'|wrap')===true);
    wrap.title='Toggle code line wrapping';wrap.onclick=e=>{e.preventDefault();e.stopPropagation();applyWrap(!editor.classList.contains('wrap-code'));};summary.append(wrap);
@@ -81,7 +81,7 @@ window.Reader=(()=>{
     const applyView=value=>{rawView=value;delete code.dataset.highlighted;if(value)code.textContent=raw;else code.innerHTML=formatted;const lines=code.textContent.split('\n');gutter.textContent=lines.map((_,i)=>i+1).join('\n');summary.querySelector('.code-lines').textContent=lines.length+' lines';view.textContent=value?'Formatted':'Raw';view.title=value?'Show readable JSON':'Show original exported JSON';view.setAttribute('aria-pressed',String(value));states.set(codeKey+'|raw',value);enhanceCode(details);};applyView(states.get(codeKey+'|raw')===true);view.onclick=e=>{e.preventDefault();e.stopPropagation();applyView(!rawView);};summary.append(view);
    }
   }
-  summary.append(copy);pre.replaceWith(details);editor.append(pre);details.append(summary,editor);foldState(details,codeKey,false);
+  summary.append(copy);pre.replaceWith(details);editor.append(pre);details.append(summary,editor);foldState(details,codeKey,readable);
  }}
  function tables(root,key){let index=0;for(const table of [...root.querySelectorAll('table')]){const cols=Math.max(...[...table.rows].map(r=>[...r.cells].reduce((n,c)=>n+(c.colSpan||1),0))),rows=table.tBodies[0]?.rows.length||Math.max(0,table.rows.length-1),card=node('section','table-card'),bar=node('div','table-toolbar'),viewport=node('div','table-wrap'),toggle=node('button','table-toggle','▾'),copy=node('button','','Copy'),expand=node('button','','Expand ↗'),tableKey=key+'|table:'+index++;
     viewport.tabIndex=0;viewport.setAttribute('role','region');viewport.setAttribute('aria-label','Scrollable table');table.style.setProperty('--table-min-width',(cols>=3?104+(cols-1)*224:Math.max(480,cols*240))+'px');table.dataset.columns=cols;

@@ -1,4 +1,4 @@
-# Offline Chat Viewer · v1.0.13
+# Offline Chat Viewer · v1.1.2
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
@@ -6,7 +6,7 @@ A local ChatGPT-style reader for your Markdown and JSON exports. The standard vi
 
 1. On Windows, right-click the downloaded ZIP → **Properties → Unblock → Apply**, if that checkbox is shown. Then **extract the entire ZIP** into a normal folder. Do not run it from inside the ZIP.
 2. Double-click **START-VIEWER.bat**. It opens your default browser. Keep its console window open while reading.
-3. The first background scan starts automatically: the viewer folder first, then nearby folders below up to **two parent folders**. Chats appear progressively; it never waits for the entire tree to be enumerated. Put the viewer near your export folder for convenient discovery.
+3. A fresh installation opens a clean welcome screen. Choose **Open export folder**; a quick shallow check can suggest a saved exporter folder. Select its upward depth and start the scan. Existing installations retain their chosen source and paused/resume preference. No example conversations or test cache ship with the portable package.
 4. For a precise location, click **Export folders → Browse…**, choose your exporter output folder, select `0 · only this folder` (automatically selected after Browse) or another upward depth, and click **Scan & index**.
 5. Click any conversation. The selected chat has priority over indexing. Titles from the manifest can appear before their content is indexed. It displays the latest **five messages first**, then fills the reading page to your configured size (100 by default) with small background requests. Older messages load as you scroll upward.
 
@@ -17,6 +17,16 @@ If Edge is not your default browser, copy the launch URL printed in the console 
 Closing the console stops the server. Settings → Stop viewer also stops it. Double-click the launcher to reopen. The bundled runtime is Windows x64; macOS/Linux can use Python 3.10+ with `python3 viewer.py` or START-VIEWER.command. Windows ARM64 can use its x64 emulation or a full Python installation.
 
 When updating, close the old viewer console, replace the app files, **keep `.viewer-data`**, and reopen START-VIEWER.bat. Your existing index and organization remain available. Type corrections update automatically without rebuilding message contents. If loading still stalls, run **CHECK-VIEWER.bat** while the viewer is open and attach **VIEWER-DIAGNOSTICS.json**. The report includes response lengths, received bytes, and transfer timings, with no conversation text, titles, folder paths, or session tokens.
+
+## Improvements in v1.1.2
+
+- Backup progress/configuration writes use unique staging files and retry brief Windows file locks. A failed write preserves the previous saved state.
+- Opening local ZIP folders works independently of saving backup preferences; the folder is created if needed and handed to Windows Explorer. Errors and results appear inside the open backup panel.
+- Drive for desktop detection prefers `G:\My Drive` when present, then checks other mounted drives and common local Drive folders. It suggests `Offline Chat Viewer Backups` within My Drive. Your saved/custom choices remain authoritative; discovery never reads cloud files or initiates uploads.
+- Quick scan and autofill checks nearby export markers and Downloads shallowly. Backups continue using the same loader source and upward traversal.
+- Copy icons accompany export, local ZIP and Drive folder paths. Windows Browse uses the modern folder dialog with an address bar, search and Quick Access. Local ZIP creation is prominent at the top of the backup workspace.
+- Attachment reference parsing no longer slows down on unmatched brackets inside saved code. Unchanged document references are cached and referenced file existence is checked again.
+- Full/progress download links display actual compressed ZIP sizes. A small progress ZIP can be legitimate when only a few files changed; the first progress backup includes all source files.
 
 ## Discovery and formats
 
@@ -56,7 +66,7 @@ When updating, close the old viewer console, replace the app files, **keep `.vie
 - Sort by newest, oldest, recent update, A–Z, or manual order. Newest/oldest use original creation time when available, otherwise source timestamps.
 - Group by categories, disk folders, or chat type; show a flat list; collapse groups; hide all project chats using the Projects checkbox.
 - Dark, pure black, light, or custom background/sidebar/text/accent colors. Adjust text size, reading width, and page size.
-- Optional remembered reading positions; 60-second incremental file checks; optional timestamps.
+- Optional remembered reading positions and timestamps. Recurring export rescans are off by default. In Settings, enable them and use the stepped interval slider: 5, 15 or 30 minutes; 1, 3, 6, 12 or 24 hours; or 3 days. The default interval is one hour and the viewer must be open. You can also use Resume / rescan when you save new exports.
 - **Ctrl+K** searches the archive. **Ctrl+F** searches the selected conversation. Search matches finish loading the saved message, expand the relevant section, highlight the matching text, and scroll it into view. Enter / Shift+Enter and the up/down buttons move through literal matches in the selected conversation.
 - Export/import your organization and appearance settings through Settings. This backup includes local source-folder paths; keep it with your own archive.
 
@@ -92,11 +102,19 @@ Your local cache is `.viewer-data/archive.sqlite3`, alongside the app. It stores
 - **Disconnected:** restart the launcher. A new session URL is printed.
 - **Reset cache:** stop the viewer, move `.viewer-data` aside, and reopen. This affects the viewer cache/settings, not source exports.
 
-## Changes in v1.0.13
+## Backups, Google Drive and ZIP integration · v1.1.2
+
+**Backups & Drive** uses the loader's current export folder and upward traversal by default. Review the file counts and boundary, choose a visible local save folder, then create full/progress ZIPs without a Google connection or schedule. They contain original Markdown, JSON/session files and saved attachments, original exporter indexes, a linked `OPEN-ARCHIVE.html` / `archive-index.json`, hashes and organization/settings. Original source bytes and relative paths are preserved. Missing links are reported.
+
+**Google Drive for desktop · no API setup** copies the completed ZIPs to the existing synced folder you choose. Google’s desktop app uploads them and reports cloud sync status separately. Stable filenames and unchanged-content checks avoid redundant copies. The optional direct account/API route remains available for users with their own Desktop app OAuth client; it uses stable remote IDs and resumable uploads. See **GOOGLE-DRIVE-SETUP.md** for both routes and local ZIP instructions. No credentials or private account-specific files are bundled.
+
+Choose daily or weekly idle backups when ready. Windows runs the job while signed in and on AC power, including when the viewer is closed, and does not wake a sleeping computer. **Integrate a saved ZIP** keeps newer existing chats and can optionally restore pins, folders, appearance and reading positions. Progress ZIPs include companion files and saved attachments for changed conversations; keep the full recovery base for unchanged conversations. Deleted paths are recorded without deleting current exports on import.
+
+## Reader improvements retained from v1.0.13
 
 - Saved line, area, bar and scatter chart widgets render locally with labels, units, legends, data and source folds. Hover or use arrow keys to inspect values; line-chart hover cards show all active series for the selected point. Unknown chart types retain a readable source fallback.
 - Self-contained saved HTML apps run in an isolated frame with network access disabled. The frame grows to fit the content. Local sliders, selectors, SVG charts and saved scripts work; apps requiring remote libraries, server APIs or missing export files may remain incomplete.
-- Code folds are closed by default. Expand them to read, wrap or copy code. Unknown code languages are inferred, and shell-wrapped Python highlights both the shell wrapper and Python body. Large blocks retain readable plain text rather than blocking the reader.
+- Genuine code folds are closed by default; readable text and output panels start open. Expand code to read, wrap or copy it. Unknown code languages are inferred, and shell-wrapped Python highlights both the shell wrapper and Python body. Large blocks retain readable plain text rather than blocking the reader.
 - Fixed the first-column wrapping rule that caused overlapping fitted tables. The repaired wrapping also applies in the expanded table dialog.
 - In-chat Find uses literal ordered occurrences, including user prompts. It loads complete long messages before highlighting, opens collapsed sections and follows layout changes while the message settles. User scrolling releases that temporary anchor.
 - Archive results are grouped by conversation with highlighted snippets, sender labels, type/category filters, relevance/recent/A-Z ordering and access to additional message matches. Filters apply before ranking limits. Next/previous navigation opens matches across chats; Back to archive results keeps the query and result list.
@@ -112,9 +130,11 @@ If an export omits the account plan, the viewer cannot prove whether Luna was se
 
 ## Validation
 
-The release was checked with 114 automated backend tests and JavaScript checks for widget extraction, layered sorting, type filtering and syntax colouring. Windows Edge browser checks exercised the reported charts and saved interactive app, hover details, exact highlights, search navigation, the overlapping four-column table in both views, folded Python/shell code, category ordering and per-group sorting. The bundled Windows runtime was used for the backend checks.
+The release was checked with 145 automated backend tests and JavaScript checks for widget extraction, layered sorting, type filtering and syntax colouring. Tests include deterministic ZIPs, attachment links, shared folder traversal, progress companions, desktop copying and cancellation, a stalled foreground reader, imports retaining original identity/dates/positions, DPAPI protection, OAuth state/PKCE, resumable uploads and stable remote file IDs. OAuth and Drive responses were mocked; no live Google account connection or cloud upload is claimed. A temporary Windows idle task was registered, inspected and removed successfully in the preceding release. The bundled Windows runtime was used for backend checks.
 
-The general release includes neutral preview data only in its documentation image. Personal exports, private indexes, account-specific ground-truth scripts/lists, test fixtures and test helpers are excluded.
+Windows Edge checks exercised the local full/progress backup controls, source preview and API-free desktop interface. Reader checks from the preceding release covered the reported charts and saved interactive app, hover details, exact highlights, cross-chat search navigation, overlapping four-column tables in both views, folded Python/shell code, category ordering and per-group sorting.
+
+A fresh portable installation was checked in Edge: no example chats are loaded and no automatic nearby-folder scan runs before choosing an export folder. The documentation preview shows the clean welcome screen. Personal exports, private indexes, account-specific ground-truth scripts/lists, test fixtures and test helpers are excluded.
 
 Optional semantic engine/model installation was not repeated for this update. Exact, typo-tolerant and ordinary text search require no downloads.
 
@@ -127,3 +147,4 @@ Stop the updated viewer, restore the previous app files, keep .viewer-data, then
 ## Licenses
 
 Third-party licenses accompany the bundled CPython, Microsoft runtime, pip, Marked, KaTeX, Highlight.js and branch helper components. Keep their license files when redistributing this portable application.
+
