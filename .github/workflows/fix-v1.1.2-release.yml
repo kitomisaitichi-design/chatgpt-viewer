@@ -1,0 +1,54 @@
+name: Fix v1.1.2 release notes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/fix-v1.1.2-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fix release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/release-notes.md <<'EOF'
+          ## Offline Chat Viewer v1.1.2
+
+          Windows x64 portable release.
+
+          ### What's new
+          - Added local archive backups that keep original MD/JSON exports, saved attachments, indexes, organization/settings, and a self-contained archive browser together.
+          - Added Google Drive for desktop backup integration with mounted-drive detection, saved custom destinations, and clearer folder controls.
+          - Improved Windows backup reliability with retry-safe temporary/progress-file handling.
+          - Improved export-folder discovery, modern folder picking, path-copy controls, ZIP-size reporting, and attachment-reference caching.
+          - Refined sidebar filtering/ordering, recurring rescan controls, readable-code presentation, and chart interaction behavior retained from the previous reader improvements.
+
+          ### Upgrade
+          Close the old viewer console, replace the app files, **keep `.viewer-data`**, and reopen `START-VIEWER.bat`.
+
+          The attached ZIP was rebuilt from the exact v1.1.2 package file set and all 122 packaged files were hash-verified before publication.
+
+          **Release ZIP SHA-256:** `263250e1add6f3279786d52bdb05d4e2db19933d987d1b19bd425451bc483aa1`
+          EOF
+          gh release edit v1.1.2 --repo "$GITHUB_REPOSITORY" --title "Offline Chat Viewer v1.1.2" --notes-file /tmp/release-notes.md --latest
+      - name: Remove temporary release workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f .github/workflows/release-v1.1.2.yml .github/workflows/fix-v1.1.2-release.yml
+          git commit -m "[release-bot] Clean v1.1.2 release workflows"
+          git push origin HEAD:main
