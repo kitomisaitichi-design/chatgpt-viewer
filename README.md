@@ -2,6 +2,12 @@
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
+## Latest Windows release
+
+- **Download:** [Offline-Chat-Viewer-v1.1.2-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.2/Offline-Chat-Viewer-v1.1.2-Windows.zip)
+- **Size:** 14,194,996 bytes
+- **SHA-256:** `01dc00f1b454b8c1cde7991a8baf37532e6dc604eefcd1eb15f4e7c49edf9d0a`
+
 ## Start on Windows / Edge
 
 1. On Windows, right-click the downloaded ZIP → **Properties → Unblock → Apply**, if that checkbox is shown. Then **extract the entire ZIP** into a normal folder. Do not run it from inside the ZIP.
