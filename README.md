@@ -4,7 +4,9 @@ A local ChatGPT-style reader for your Markdown and JSON exports. The standard vi
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.3-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.3/Offline-Chat-Viewer-v1.1.3-Windows.zip)
+The v1.1.3 source update is published. Its portable Windows release asset is awaiting upload.
+
+- **Latest published Windows download (v1.1.2):** [Offline-Chat-Viewer-v1.1.2-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.2/Offline-Chat-Viewer-v1.1.2-Windows.zip)
 
 ## Start on Windows / Edge
 
@@ -160,4 +162,3 @@ Stop the updated viewer, restore the previous app files, keep .viewer-data, then
 ## Licenses
 
 Third-party licenses accompany the bundled CPython, Microsoft runtime, pip, Marked, KaTeX, Highlight.js and branch helper components. Keep their license files when redistributing this portable application.
-
