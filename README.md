@@ -1,18 +1,16 @@
-# Offline Chat Viewer · v1.1.2
+# Offline Chat Viewer · v1.1.3
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.2-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.2/Offline-Chat-Viewer-v1.1.2-Windows.zip)
-- **Size:** 14,194,996 bytes
-- **SHA-256:** `01dc00f1b454b8c1cde7991a8baf37532e6dc604eefcd1eb15f4e7c49edf9d0a`
+- **Download:** [Offline-Chat-Viewer-v1.1.3-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.3/Offline-Chat-Viewer-v1.1.3-Windows.zip)
 
 ## Start on Windows / Edge
 
 1. On Windows, right-click the downloaded ZIP → **Properties → Unblock → Apply**, if that checkbox is shown. Then **extract the entire ZIP** into a normal folder. Do not run it from inside the ZIP.
 2. Double-click **START-VIEWER.bat**. It opens your default browser. Keep its console window open while reading.
-3. A fresh installation opens a clean welcome screen. Choose **Open export folder**; a quick shallow check can suggest a saved exporter folder. Select its upward depth and start the scan. Existing installations retain their chosen source and paused/resume preference. No example conversations or test cache ship with the portable package.
+3. A fresh Windows user sees a clean welcome screen. Existing users inherit their saved preferences automatically across versions. Choose **Open export folder**; a quick shallow check can suggest a saved exporter folder. Select its upward depth and start the scan. Existing installations retain their chosen source and paused/resume preference. No example conversations or test cache ship with the portable package.
 4. For a precise location, click **Export folders → Browse…**, choose your exporter output folder, select `0 · only this folder` (automatically selected after Browse) or another upward depth, and click **Scan & index**.
 5. Click any conversation. The selected chat has priority over indexing. Titles from the manifest can appear before their content is indexed. It displays the latest **five messages first**, then fills the reading page to your configured size (100 by default) with small background requests. Older messages load as you scroll upward.
 
@@ -24,7 +22,16 @@ Closing the console stops the server. Settings → Stop viewer also stops it. Do
 
 When updating, close the old viewer console, replace the app files, **keep `.viewer-data`**, and reopen START-VIEWER.bat. Your existing index and organization remain available. Type corrections update automatically without rebuilding message contents. If loading still stalls, run **CHECK-VIEWER.bat** while the viewer is open and attach **VIEWER-DIAGNOSTICS.json**. The report includes response lengths, received bytes, and transfer timings, with no conversation text, titles, folder paths, or session tokens.
 
-## Improvements in v1.1.2
+## Improvements in v1.1.3
+
+- Preferences follow new installations automatically through `%LOCALAPPDATA%\OfflineChatViewer\preferences.json`: names, folders, pins, manual order, chat highlights, sticky state, Trash, appearance, reading positions, source choices and backup preferences. Portable caches remain local. Shared personal preferences and Google credentials never ship in the public ZIP. Use `--isolated` for a separate portable archive, or `--profile PATH` for an explicit preference file.
+- Chat menus provide quick rename, pin, move to folder, highlight colours, sticky priority and reversible Trash. Renaming changes the display name; original title, filename and source path remain available in Details. Trash hides chats from normal lists and cross-search without deleting their original files. Drag to Trash, hover to open its panel, drag back to restore, or use the Restore button. Distinct source files and attachments stay intact.
+- Direct chat-ID lookups replace repeated catalog searches. Small catalog changes travel as row deltas; indexing-only changes do not rebuild the sidebar. Sorts retain the existing minimal-movement algorithm and scroll anchor. Quiet background tabs poll less often. Cached type rules do not repeat solely because the app version changed.
+- Automatic backups have a 1–168 hour slider and exact hour input, local-only or Drive delivery, optional idle waiting, 5–120 minute idle thresholds, and an AC-power choice. Windows checks every five minutes while signed in, including with the viewer closed, and only runs a backup when its saved interval and conditions are met. Automatic backups remain opt-in.
+- Google Drive detection prefers an existing `G:\My Drive`, checks other mounted drives and standard mirrored folders, and preserves a custom destination. The no-API route uses the signed-in Google Drive desktop app. Drive credentials never enter the shared preference file.
+- Cleanup maintains the requested full/progress slots. Identical extra viewer ZIPs are removed only after comparing their bytes with a retained canonical ZIP. Distinct extra viewer archives move to `.retired-viewer-backups` for recovery. Unrelated ZIPs are untouched. Cleanup can run after successful backups or from its button; it does not run during an active job.
+
+## Earlier backup improvements
 
 - Backup progress/configuration writes use unique staging files and retry brief Windows file locks. A failed write preserves the previous saved state.
 - Opening local ZIP folders works independently of saving backup preferences; the folder is created if needed and handed to Windows Explorer. Errors and results appear inside the open backup panel.
@@ -108,7 +115,7 @@ Your local cache is `.viewer-data/archive.sqlite3`, alongside the app. It stores
 - **Disconnected:** restart the launcher. A new session URL is printed.
 - **Reset cache:** stop the viewer, move `.viewer-data` aside, and reopen. This affects the viewer cache/settings, not source exports.
 
-## Backups, Google Drive and ZIP integration · v1.1.2
+## Backups, Google Drive and ZIP integration · v1.1.3
 
 **Backups & Drive** uses the loader's current export folder and upward traversal by default. Review the file counts and boundary, choose a visible local save folder, then create full/progress ZIPs without a Google connection or schedule. They contain original Markdown, JSON/session files and saved attachments, original exporter indexes, a linked `OPEN-ARCHIVE.html` / `archive-index.json`, hashes and organization/settings. Original source bytes and relative paths are preserved. Missing links are reported.
 

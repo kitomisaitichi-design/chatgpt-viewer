@@ -13,7 +13,8 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.2'
+VERSION = '1.1.3'
+from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
 ROLE = re.compile(r'^## (You|User|Assistant|ChatGPT|Tool|System)(?: \(([^)]+)\))?\s*$')
@@ -290,7 +291,7 @@ class Archive:
     def __init__(self,data_dir,background_process=True,initialize=True):
         self.data_dir=Path(data_dir);self.data_dir.mkdir(parents=True,exist_ok=True)
         self.dbpath=self.data_dir/'archive.sqlite3';self.lock=threading.RLock(); self.scan_lock=threading.Lock()
-        self.branch_cache={};self.revision=0;self.cancel_event=threading.Event();self.request_lock=threading.Lock()
+        self.profile=None;self.ui_row_revisions={};self.ui_delta_floor=0;self.branch_cache={};self.revision=0;self.cancel_event=threading.Event();self.request_lock=threading.Lock()
         self.background_process=background_process;self.worker=None;self.reader_pool=None;self.reader_future=None;self.source_link_cache={}
         self.source_reader=SourceReader(parse_json,parse_md)
         self.mp=multiprocessing.get_context('spawn');self.foreground=self.mp.Event();self.foreground_count=0;self.foreground_lock=threading.Lock()
@@ -315,6 +316,9 @@ class Archive:
             CREATE TABLE IF NOT EXISTS scanned_files(path TEXT PRIMARY KEY,fingerprint TEXT,status TEXT);
             CREATE TABLE IF NOT EXISTS vectors(cid TEXT,seq INTEGER,part INTEGER,hash TEXT,vector BLOB,PRIMARY KEY(cid,seq,part));
             ''')
+            organization_columns={r['name'] for r in db.execute('PRAGMA table_info(organization)')}
+            for name,definition in (('trashed','INTEGER DEFAULT 0'),('color',"TEXT DEFAULT ''"),('sticky','INTEGER DEFAULT 0')):
+                if name not in organization_columns:db.execute('ALTER TABLE organization ADD COLUMN '+name+' '+definition)
             columns={r['name'] for r in db.execute('PRAGMA table_info(messages)')}
             if 'extras' not in columns:db.execute("ALTER TABLE messages ADD COLUMN extras TEXT DEFAULT '{}'")
             if 'kind_evidence' not in {r['name'] for r in db.execute('PRAGMA table_info(chats)')}:
@@ -339,7 +343,7 @@ class Archive:
                 with self.ui_cache_lock:
                     for c in chats:
                         if c['id'] not in self.ui_cache['chats']:self.ui_cache['chats'][c['id']]=c
-                    self.ui_cache['coverage']=coverage;self.ui_cache['loading']=False;self.ui_cache['revision']+=1
+                    self.ui_cache['coverage']=coverage;self.ui_cache['loading']=False;self.ui_cache['revision']+=1;self.ui_delta_floor=self.ui_cache['revision']
                 self.repair_cached_types()
             except Exception as e:
                 self.status.setdefault('errors',[]).append('Cached archive read: '+str(e))
@@ -350,7 +354,7 @@ class Archive:
         signals={}
         with self.connect() as db:
             marker=db.execute("SELECT value FROM settings WHERE key='typeRepairVersion'").fetchone()
-            if marker and json.loads(marker['value'])==VERSION:return
+            if marker and json.loads(marker['value']) in ('1.1.2','surface-rules-v112'):return
             cached=[dict(row) for row in db.execute("SELECT id,kind,path FROM chats WHERE kind!='codex'")]
             free_ids={row['id'] for row in cached if free_account(source_header(row['path']))}
             for row in db.execute("SELECT cid,extras FROM messages WHERE role='assistant' AND (extras LIKE '%-wm%' OR extras LIKE '%luna%' OR extras LIKE '%terra%' OR extras LIKE '%astra%' OR extras LIKE '%sol%')"):
@@ -372,14 +376,14 @@ class Archive:
                 before=db.total_changes
                 db.execute("UPDATE chats SET kind=?,kind_evidence=? WHERE id=? AND kind!='codex' AND (kind!=? OR kind_evidence!=?)",(kind,evidence,cid,kind,evidence))
                 changed|=db.total_changes>before
-            db.execute("INSERT OR REPLACE INTO settings VALUES('typeRepairVersion',?)",(json.dumps(VERSION),))
+            db.execute("INSERT OR REPLACE INTO settings VALUES('typeRepairVersion',?)",(json.dumps('surface-rules-v112'),))
         if changed:self.revision+=1
         if self.ui_cache is not None:
             with self.ui_cache_lock:
                 for cid,(kind,evidence) in signals.items():
                     c=self.ui_cache['chats'].get(cid)
                     if c and c['kind']!='codex' and (c['kind']!=kind or c.get('kind_evidence')!=evidence):
-                        c.update(kind=kind,kind_evidence=evidence);self.ui_cache['revision']+=1
+                        c.update(kind=kind,kind_evidence=evidence);self.ui_cache['revision']+=1;self.ui_row_revisions[cid]=self.ui_cache['revision']
 
     def announce_source(self,f,root):
         if f.suffix.lower()=='.json':
@@ -406,10 +410,10 @@ class Archive:
             for c in sources:
                 old=self.ui_cache['chats'].get(c['id'],{})
                 if old.get('path','').lower().endswith('.json') and c.get('path','').lower().endswith('.md') and Path(old['path']).is_file():continue
-                merged={**dict(category='',pinned=0,position=0,alias=''),**old,**c}
+                merged={**dict(category='',pinned=0,position=0,alias='',trashed=0,color='',sticky=0),**old,**c}
                 if old.get('loaded') and not c.get('loaded') and old.get('path')==c.get('path') and (not c.get('fingerprint') or old.get('fingerprint')==c.get('fingerprint')):
                     merged.update(loaded=True,count=old.get('count',0),fingerprint=old.get('fingerprint',''))
-                if merged!=old:self.ui_cache['chats'][c['id']]=merged;changed=True
+                if merged!=old:self.ui_cache['chats'][c['id']]=merged;self.ui_row_revisions[c['id']]=self.ui_cache['revision']+1;changed=True
             if coverage is not None and coverage!=self.ui_cache['coverage']:self.ui_cache['coverage']=coverage;changed=True
             if changed:self.ui_cache['revision']+=1
     def save_settings_later(self,values):
@@ -512,6 +516,16 @@ class Archive:
             result=dict(chats=self.catalog() if since is None or str(revision)!=str(since) else None,
                         revision=revision,coverage=self.coverage(),settings=self.settings(),scan=dict(self.status),semantic=dict(self.semantic_state))
         if limit is not None and result['chats'] is not None:
+            try:previous=int(since) if since is not None else -1
+            except (ValueError,TypeError):previous=-1
+            if self.ui_cache is not None and previous>=self.ui_delta_floor:
+                with self.ui_cache_lock:
+                    changes=[c for cid,c in self.ui_cache['chats'].items() if self.ui_row_revisions.get(cid,0)>previous]
+                    size=sum(len(json.dumps(c)) for c in changes)
+                    if len(changes)<=100 and size<128*1024:
+                        result['chats']=changes;result['delta']=True
+                        result['settings']={k:result['settings'][k] for k in ('scan_start','scan_up','scanPaused') if k in result['settings']}
+                        return result
             page=self.catalog_batch(0,limit,priority or result['settings'].get('lastChat',''))
             result['chats']=page.pop('chats');result['catalog']=page;result['revision']=page['revision']
         if limit is not None and since is not None:
@@ -581,9 +595,10 @@ class Archive:
             with self.ui_cache_lock:self.ui_cache['settings'].update(values)
         with self.lock,self.connect() as db:
             for k,v in values.items():db.execute('INSERT OR REPLACE INTO settings VALUES(?,?)',(k,json.dumps(v)))
+        if self.profile:self.profile.update(settings=values)
     def catalog(self):
         with self.connect() as db:
-            ready=[dict(dict(r),loaded=True) for r in db.execute("SELECT c.*,COALESCE(o.category,'') category,COALESCE(o.pinned,0) pinned,COALESCE(o.position,0) position,COALESCE(o.alias,'') alias FROM chats c LEFT JOIN organization o ON c.id=o.cid")]
+            ready=[dict(dict(r),loaded=True) for r in db.execute("SELECT c.*,COALESCE(o.category,'') category,COALESCE(o.pinned,0) pinned,COALESCE(o.position,0) position,COALESCE(o.alias,'') alias,COALESCE(o.trashed,0) trashed,COALESCE(o.color,'') color,COALESCE(o.sticky,0) sticky FROM chats c LEFT JOIN organization o ON c.id=o.cid")]
             ids={r['id'] for r in ready};organization={r['cid']:dict(r) for r in db.execute('SELECT * FROM organization')}
             for r in db.execute('SELECT * FROM manifest_entries WHERE available=1'):
                 if r['cid'] in ids:continue
@@ -591,8 +606,8 @@ class Archive:
                 ready.append(dict(id=r['cid'],title=m.get('title') or Path(r['path']).stem,url=m.get('url') or 'https://chatgpt.com/c/'+r['cid'],
                     created=epoch(m.get('create_time')),updated=epoch(m.get('update_time')),kind=(surface_signal(m) or (canonical_kind(m.get('chat_kind') or m.get('chatKind')),))[0],kind_evidence=m.get('kind_evidence') or (surface_signal(m) or ('','No saved Work/Codex product marker'))[1],
                     project=m.get('project') if isinstance(m.get('project'),str) else '',path=r['path'],fingerprint='',count=0,folder=str(Path(r['path']).parent),
-                    category='',pinned=0,position=0,alias='',loaded=False))
-                ready[-1].update({k:organization.get(r['cid'],{}).get(k,ready[-1][k]) for k in ('category','pinned','position','alias')})
+                    category='',pinned=0,position=0,alias='',trashed=0,color='',sticky=0,loaded=False))
+                ready[-1].update({k:organization.get(r['cid'],{}).get(k,ready[-1][k]) for k in ORGANIZATION_FIELDS})
             return ready
     def coverage(self):
         with self.connect() as db:
@@ -620,19 +635,30 @@ class Archive:
         if available:
             self.live_sources[cid]=dict(id=cid,title=entry.get('title') or Path(path).stem,url=entry.get('url') or 'https://chatgpt.com/c/'+cid,created=epoch(entry.get('create_time')),updated=epoch(entry.get('update_time')),kind=signal[0] if signal else 'chat',kind_evidence=signal[1] if signal else 'No saved Work/Codex product marker',project=entry.get('project') if isinstance(entry.get('project'),str) else '',path=path,fingerprint='',count=0,folder=str(Path(path).parent.relative_to(root)),loaded=False)
 
+    @staticmethod
+    def organization_values(values):
+        result={k:values[k] for k in ORGANIZATION_FIELDS if k in values}
+        for key in ('trashed','sticky','pinned'):
+            if key in result:result[key]=int(bool(result[key]))
+        if 'color' in result and result['color'] and not re.fullmatch(r'#[a-fA-F0-9]{6}',str(result['color'])):raise ValueError('Choose a valid chat color.')
+        for key in ('alias','category'):
+            if key in result:result[key]=str(result[key] or '')[:500]
+        return result
     def organize(self,cid,values):
+        values=self.organization_values(values)
         with self.lock,self.connect() as db:
             db.execute('INSERT OR IGNORE INTO organization(cid) VALUES(?)',(cid,))
-            for k in ('category','pinned','position','alias'):
+            for k in ORGANIZATION_FIELDS:
                 if k in values:db.execute('UPDATE organization SET '+k+'=? WHERE cid=?',(values[k],cid))
         self.revision+=1
         if self.ui_cache is not None:
             with self.ui_cache_lock:
-                if cid in self.ui_cache['chats']:self.ui_cache['chats'][cid].update(values)
+                if cid in self.ui_cache['chats']:self.ui_cache['chats'][cid].update(values);self.ui_row_revisions[cid]=self.ui_cache['revision']+1
                 self.ui_cache['revision']+=1
+        if self.profile:self.profile.update(organization=[dict(id=cid,**values)])
     def organize_many(self,changes):
         if not isinstance(changes,list) or len(changes)>5000:raise ValueError('Invalid organization batch.')
-        rows=[(str(r['id']),{k:r[k] for k in ('category','pinned','position','alias') if k in r}) for r in changes]
+        rows=[(str(r['id']),self.organization_values(r)) for r in changes]
         with self.lock,self.connect() as db:
             for cid,values in rows:
                 db.execute('INSERT OR IGNORE INTO organization(cid) VALUES(?)',(cid,))
@@ -641,8 +667,9 @@ class Archive:
         if self.ui_cache is not None:
             with self.ui_cache_lock:
                 for cid,values in rows:
-                    if cid in self.ui_cache['chats']:self.ui_cache['chats'][cid].update(values)
+                    if cid in self.ui_cache['chats']:self.ui_cache['chats'][cid].update(values);self.ui_row_revisions[cid]=self.ui_cache['revision']+1
                 self.ui_cache['revision']+=1
+        if self.profile:self.profile.update(organization=[dict(id=cid,**values) for cid,values in rows])
     def discover_paths(self,start,root,event):
         yield from iter_documents(start,root,event,self.status,APP)
     def read_items(self,f):
@@ -1166,9 +1193,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(bounded_message_page(page,q.get('bytes',32768),q.get('around'),q.get('after') is not None));return
             if url.path=='/api/search':
                 scope=None
-                if q.get('type','all')!='all' or q.get('category','all')!='all':
+                if q.get('include_trash')!='1':
                     overrides=a.settings().get('kindOverrides') or {}
-                    scope={c['id'] for c in a.catalog() if (q.get('type','all')=='all' or canonical_kind(overrides.get(c['id']) or c['kind'])==q['type']) and (q.get('category','all')=='all' or (c.get('category') or '')==q['category'])}
+                    scope={c['id'] for c in a.catalog() if not c.get('trashed') and (q.get('type','all')=='all' or canonical_kind(overrides.get(c['id']) or c['kind'])==q['type']) and (q.get('category','all')=='all' or (c.get('category') or '')==q['category'])}
                 result=a.search(q.get('q',''),q.get('mode','smart'),q.get('id'),scope)
                 with a.connect() as db:
                     for hit in result['results']:
@@ -1240,6 +1267,7 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path=='/api/backup/select-folder':
                 folder=self.server.backup.drive.folder(d.get('id',''));self.send(self.server.backup.save_config({'folder_id':folder['id'],'folder_name':folder['name']}));return
             elif self.path=='/api/backup/run':self.send(self.server.backup.start(upload=d.get('upload',True)));return
+            elif self.path=='/api/backup/cleanup':self.send(self.server.backup.cleanup());return
             elif self.path=='/api/backup/cancel':self.server.backup.cancel.set()
             elif self.path=='/api/backup/schedule':self.send(self.server.backup.schedule(bool(d.get('enabled'))));return
             elif self.path=='/api/backup/import':self.send(self.server.backup.import_zip(d.get('path',''),bool(d.get('restore_settings'))));return
@@ -1262,8 +1290,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:self.send({'error':str(e)},400)
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--root',default=str(APP));parser.add_argument('--up',type=int,default=None);parser.add_argument('--port',type=int,default=0);parser.add_argument('--no-browser',action='store_true');parser.add_argument('--data-dir',default=str(APP/'.viewer-data'));args=parser.parse_args()
-    a=Archive(args.data_dir);settings=a.settings()
+    parser=argparse.ArgumentParser();parser.add_argument('--root',default=str(APP));parser.add_argument('--up',type=int,default=None);parser.add_argument('--port',type=int,default=0);parser.add_argument('--no-browser',action='store_true');parser.add_argument('--data-dir',default=str(APP/'.viewer-data'));parser.add_argument('--profile',default=None);parser.add_argument('--isolated',action='store_true');args=parser.parse_args()
+    a=Archive(args.data_dir)
+    if not args.isolated and (args.profile or args.data_dir==str(APP/'.viewer-data')):
+        from preferences import attach,profile_path
+        attach(a,args.profile or profile_path())
+    settings=a.settings()
     if settings.get('steadySidebarPolicy')!=1:
         a.save_settings({'autoRefresh':False,'steadySidebarPolicy':1});settings=a.settings()
     a.enable_ui_cache();root=args.root if args.root!=str(APP) else settings.get('scan_start',args.root);up=args.up if args.up is not None else settings.get('scan_up',2)

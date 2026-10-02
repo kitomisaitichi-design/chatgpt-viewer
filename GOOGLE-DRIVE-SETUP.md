@@ -54,3 +54,7 @@ Release checks cover original-file preservation, linked index targets, loader tr
 Download links show each ZIP’s actual compressed size. A full archive includes all discovered saved documents and attachments. A progress ZIP includes changes since the last successful backup and may be small when little changed; its first run includes everything. **Review files to include** shows the full source scope and source size before compression.
 
 Copy folder paths with the adjacent copy icon. **Open local ZIP folder** opens Explorer independently of saving settings, creating the local folder if needed. Its result or any error appears within the backup dialog. State-file writes retry brief Windows sharing locks and preserve the previous saved file if replacement fails.
+
+
+VERSION 1.1.3
+Preferences automatically follow new installs for the same Windows user. Keep .viewer-data when updating to preserve the index. Conversation menus include colours and reversible Trash. Backups support every 1-168 hours, optional idle/AC-power conditions and local-only delivery. Extra distinct viewer ZIPs move to .retired-viewer-backups; exact duplicate copies can be removed. Automatic backups remain off until you enable and save them.

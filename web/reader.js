@@ -8,7 +8,7 @@ window.Reader=(()=>{
  function stopColour(){clearTimeout(colourTimer);if(colourActive){colourActive.resolve(null);colourActive=null;}for(const job of colourJobs.splice(0))job.resolve(null);colourWorker?.terminate();colourWorker=null;colourReady=false;}
  function runColour(){
   if(!colourJobs.length||colourActive)return;
-  if(!colourWorker){colourWorker=new Worker('highlight-worker.js?v=1.1.2');colourTimer=setTimeout(stopColour,5000);colourWorker.onerror=stopColour;colourWorker.onmessage=e=>{if(e.data.ready){clearTimeout(colourTimer);colourReady=true;runColour();return;}if(e.data.error&&!e.data.id){stopColour();return;}if(colourActive&&e.data.id===colourActive.id){clearTimeout(colourTimer);const job=colourActive;colourActive=null;job.resolve(e.data.html||null);runColour();}};}
+  if(!colourWorker){colourWorker=new Worker('highlight-worker.js?v=1.1.3');colourTimer=setTimeout(stopColour,5000);colourWorker.onerror=stopColour;colourWorker.onmessage=e=>{if(e.data.ready){clearTimeout(colourTimer);colourReady=true;runColour();return;}if(e.data.error&&!e.data.id){stopColour();return;}if(colourActive&&e.data.id===colourActive.id){clearTimeout(colourTimer);const job=colourActive;colourActive=null;job.resolve(e.data.html||null);runColour();}};}
   if(!colourReady)return;
   while(colourJobs.length&&!colourJobs[0].root.isConnected)colourJobs.shift().resolve(null);
   if(!colourJobs.length)return;colourActive=colourJobs.shift();colourTimer=setTimeout(stopColour,1200);colourWorker.postMessage({id:colourActive.id,text:colourActive.text,language:colourActive.language});
@@ -22,7 +22,7 @@ window.Reader=(()=>{
   else for(const job of jobs.splice(0))job.reject(Error('A different conversation was opened.'));
   stopColour();
  }
- function preload(){if(worker)return;worker=new Worker('render-worker.js?v=1.1.2');startupTimer=setTimeout(()=>failWorker('Formatting renderer startup timed out.'),15000);
+ function preload(){if(worker)return;worker=new Worker('render-worker.js?v=1.1.3');startupTimer=setTimeout(()=>failWorker('Formatting renderer startup timed out.'),15000);
   worker.onmessage=e=>{if(e.data.ready){clearTimeout(startupTimer);ready=true;run();return;}if(e.data.startupError){failWorker(e.data.startupError);return;}
    if(active&&e.data.id===active.id){const job=active;clearTimeout(job.timer);active=null;e.data.error?job.reject(Error(e.data.error)):job.resolve(e.data.html);run();}};
   worker.onerror=()=>failWorker('Formatting worker could not load.');

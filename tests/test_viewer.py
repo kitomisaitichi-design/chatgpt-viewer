@@ -174,7 +174,7 @@ class ForegroundTests(unittest.TestCase):
         f=self.write('chat.md','# Thread read\n## You\nQuestion\n## Assistant\nAnswer')
         from viewer import source_page
         threads=[]
-        def record(*args):threads.append(threading.current_thread().name);return source_page(*args)
+        def record(*args,**kwargs):threads.append(threading.current_thread().name);return source_page(*args,**kwargs)
         with patch('viewer.source_page',side_effect=record):page=self.a.read_source_page('thread-read',str(f),None,None,'100',False,None)
         self.assertEqual(page['total'],2);self.assertTrue(threads[0].startswith('SelectedChatReader'))
     def test_scan_worker_does_not_reinitialize_database(self):
@@ -202,6 +202,18 @@ class HttpTests(unittest.TestCase):
         r,_=self.request('GET','/vendor/marked.js?v=test',headers=headers);self.assertEqual(r.getheader('Cache-Control'),'private, max-age=86400')
         for path in ('/app.js','/api/state'):
             r,_=self.request('GET',path,headers=headers);self.assertEqual(r.getheader('Cache-Control'),'no-store')
+    def test_two_viewers_share_browser_without_replacing_session_cookies(self):
+        other=Server(('127.0.0.1',0),self.a)
+        thread=threading.Thread(target=other.serve_forever,daemon=True);thread.start()
+        client=http.client.HTTPConnection('127.0.0.1',other.server_port)
+        try:
+            r,_=self.request('GET','/?token='+self.s.token);first=r.getheader('Set-Cookie').split(';')[0]
+            client.request('GET','/?token='+other.token);r=client.getresponse();r.read();second=r.getheader('Set-Cookie').split(';')[0]
+            self.assertNotEqual(first.split('=')[0],second.split('=')[0])
+            cookies={'Cookie':first+'; '+second}
+            r,_=self.request('GET','/api/health',headers=cookies);self.assertEqual(r.status,200)
+            client.request('GET','/api/health',headers=cookies);r=client.getresponse();r.read();self.assertEqual(r.status,200)
+        finally:client.close();other.shutdown();other.server_close();thread.join()
 
     def test_cross_origin_write_and_host_rebinding_rejected(self):
         cookie='viewer_token='+self.s.token;r,_=self.request('POST','/api/settings','{}',{'Cookie':cookie,'Origin':'https://example.com'});self.assertEqual(r.status,403)

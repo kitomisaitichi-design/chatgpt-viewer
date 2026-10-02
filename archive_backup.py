@@ -7,6 +7,7 @@ from discovery import scan_boundary
 from export_bundle import documents as discover_documents,asset_paths,counts,conversation_map,progress_files,linked_index
 from atomic_files import atomic_bytes
 from folder_tools import drive_suggestion,open_folder
+from backup_policy import interval_seconds,power_allowed,retire_extras
 
 SKIP={'.viewer-data','.git','__pycache__','node_modules','runtime','models','.semantic-env'}
 TEXT={'.md','.json','.jsonl'}
@@ -152,11 +153,20 @@ class BackupManager:
         self.archive=archive;self.app=Path(app);self.data=archive.data_dir;self.folder=self.data/'backups';self.folder.mkdir(exist_ok=True);self.drive=Drive(self.data)
         self.cancel=threading.Event();self.worker=None;self.stop=threading.Event();self.scheduled=False;self.last_write=0;self.progress_lock=threading.RLock()
         self.config_path=self.data/'backup-config.json';self.state_path=self.data/'backup-state.secure';self.status_path=self.data/'backup-progress.json'
+        self.lock_path=self.data/'backup.lock'
+        if archive.profile:
+            self.lock_path=archive.profile.path.with_suffix('.backup.lock')
+            shared=archive.profile.path.with_suffix('.backup-state.secure')
+            if not shared.exists() and self.state_path.exists():
+                with job_lock(self.lock_path):
+                    if not shared.exists():atomic_bytes(shared,self.state_path.read_bytes(),private=True)
+            self.state_path=shared
         self.folder=Path(self.config()['local_folder']);self.folder.mkdir(parents=True,exist_ok=True)
     def config(self):
-        settings=self.archive.settings();default=dict(source=settings.get('scan_start',''),up=settings.get('scan_up',0),source_mode='loader',route='desktop',local_folder=str(self.data.resolve().parent/'Backups'),sync_folder='',enabled=False,cadence='daily',idle_minutes=10,modes='both',folder_id='',folder_name='')
+        settings=self.archive.settings();default=dict(source=settings.get('scan_start',''),up=settings.get('scan_up',0),source_mode='loader',route='desktop',local_folder=str(self.data.resolve().parent/'Backups'),sync_folder='',enabled=False,cadence='daily',interval_hours=24,idle_minutes=10,idle_required=True,ac_only=True,auto_upload=True,cleanup_extras=True,modes='both',folder_id='',folder_name='')
         if self.config_path.exists():
             saved=json.loads(self.config_path.read_text(encoding='utf-8'));default.update(saved)
+            if 'interval_hours' not in saved:default['interval_hours']=168 if saved.get('cadence')=='weekly' else 24
             if 'source_mode' not in saved:default['source_mode']='loader' if saved.get('source')==settings.get('scan_start') else 'custom'
             if 'route' not in saved and saved.get('folder_id'):default['route']='api'
         if default['source_mode']=='loader':default.update(source=settings.get('scan_start',''),up=settings.get('scan_up',0))
@@ -164,7 +174,7 @@ class BackupManager:
         return default
     def save_config(self,values):
         config=self.config()
-        for k in ('source','up','source_mode','route','local_folder','sync_folder','cadence','idle_minutes','modes','folder_id','folder_name'):
+        for k in ('source','up','source_mode','route','local_folder','sync_folder','cadence','interval_hours','idle_minutes','idle_required','ac_only','auto_upload','cleanup_extras','modes','folder_id','folder_name'):
             if k in values:config[k]=values[k]
         if 'source' in values and 'source_mode' not in values:config['source_mode']='custom'
         if config['source_mode'] not in ('loader','custom') or config['route'] not in ('desktop','api'):raise ValueError('Invalid backup source or destination method.')
@@ -172,7 +182,11 @@ class BackupManager:
             settings=self.archive.settings();config.update(source=settings.get('scan_start',''),up=settings.get('scan_up',0))
         if not config['local_folder']:config['local_folder']=str(self.data.resolve().parent/'Backups')
         config['up']=max(0,min(4,int(config['up'])))
-        if config['cadence'] not in ('daily','weekly') or config['modes'] not in ('both','full','progress'):raise ValueError('Invalid backup schedule.')
+        if config['cadence'] not in ('daily','weekly','custom') or config['modes'] not in ('both','full','progress'):raise ValueError('Invalid backup schedule.')
+        if 'interval_hours' not in values and 'cadence' in values:config['interval_hours']=168 if values['cadence']=='weekly' else 24
+        config['interval_hours']=max(1,min(168,int(config['interval_hours'])))
+        config['cadence']='daily' if config['interval_hours']==24 else 'weekly' if config['interval_hours']==168 else 'custom'
+        for key in ('idle_required','ac_only','auto_upload','cleanup_extras'):config[key]=bool(config[key])
         config['idle_minutes']=max(1,min(120,int(config['idle_minutes'])))
         if config['source'] and not Path(config['source']).expanduser().is_dir():raise ValueError('The export folder could not be found.')
         if config['folder_id'] and not re.fullmatch(r'[a-zA-Z0-9_-]+',config['folder_id']):raise ValueError('Invalid Google Drive folder ID.')
@@ -182,7 +196,9 @@ class BackupManager:
                 if path.parent==path:raise ValueError('Choose a specific backup folder, not the root of a drive.')
                 if path.exists() and not path.is_dir():raise ValueError('The backup destination must be a folder.')
                 config[key]=str(path)
-        write_json(self.config_path,config);return config
+        write_json(self.config_path,config)
+        if self.archive.profile:self.archive.profile.update(backup={k:v for k,v in config.items() if k!='task_name'})
+        return config
     def scope(self):
         config=self.config();start,root=scan_boundary(config['source'],config['up']);return config,start,root
     def inventory(self,hashes=False,state=None):
@@ -228,7 +244,7 @@ class BackupManager:
         except (OSError,ValueError):progress={}
         running=False
         try:
-            with job_lock(self.data/'backup.lock'):pass
+            with job_lock(self.lock_path):pass
         except ValueError:running=True
         if not running and time.time()-progress.get('at',0)>5 and (progress.get('phase','').startswith(('Packaging','Uploading','Copying')) or progress.get('phase') in ('Preparing backup','Finding linked attachments','Checking backup changes','Unpacking archive','Integrating conversations')):
             progress={'phase':'Previous job stopped','message':'Run it again to continue. Completed backups and original files have been kept.'}
@@ -243,7 +259,8 @@ class BackupManager:
         if self.cancel.is_set():raise InterruptedError('Cancelled. Completed backups and original exports are kept.')
         if self.scheduled:
             seconds=idle_seconds()
-            if seconds is None or seconds<self.config()['idle_minutes']*60:raise InterruptedError('Waiting for the computer to become idle again.')
+            if self.config()['idle_required'] and (seconds is None or seconds<self.config()['idle_minutes']*60):raise InterruptedError('Waiting for the computer to become idle again.')
+        if self.scheduled and not power_allowed(self.config()):raise InterruptedError('Waiting for AC power.')
         # Give interactive work priority without letting a stalled read starve a backup.
         # Cancellation must also remain responsive during this short pause.
         if self.archive.foreground.is_set() and self.cancel.wait(.02):raise InterruptedError('Cancelled. Completed backups and original exports are kept.')
@@ -252,7 +269,7 @@ class BackupManager:
         self.cancel.clear();self.scheduled=scheduled;self.worker=threading.Thread(target=self._run,args=(upload,),daemon=True);self.worker.start();return {'started':True}
     def _run(self,upload):
         try:
-            with job_lock(self.data/'backup.lock'):self.run(upload)
+            with job_lock(self.lock_path):self.run(upload)
         except InterruptedError as e:self.update(phase='Waiting' if self.scheduled else 'Cancelled',error=str(e),force=True)
         except Exception as e:self.update(phase='Needs attention',error=str(e),force=True)
     def run(self,upload=True):
@@ -263,7 +280,7 @@ class BackupManager:
         self.folder=Path(config['local_folder']);self.folder.mkdir(parents=True,exist_ok=True)
         if not files:raise ValueError('No Markdown or JSON exports were found in this folder.')
         state['hash_cache']=files;state['last_checked']=time.time();state['missing_count']=len(missing);state['missing']=missing[:100];state['source_counts']=counts(files);state['scope_root']=str(root)
-        settings=self.archive.settings();catalog=self.archive.catalog();organization=[{k:c.get(k) for k in ('id','category','pinned','position','alias')} for c in catalog];source_map=[];conversations=conversation_map(root,files,catalog)
+        settings=self.archive.settings();catalog=self.archive.catalog();organization=[{k:c.get(k) for k in ('id','category','pinned','position','alias','trashed','color','sticky')} for c in catalog];source_map=[];conversations=conversation_map(root,files,catalog)
         for c in conversations:
             related={p for doc in [*c.get('markdown',[]),*c.get('json',[])] for p in links.get(doc,[]) if p in files and p not in c.get('markdown',[]) and p not in c.get('json',[])};c['attachments']=sorted(set(c.get('attachments',[]))|related)
             for path in [*c.get('markdown',[]),*c.get('json',[])]:source_map.append(dict(path=path,**{k:c.get(k) for k in ('id','title','url','created','updated','kind','project')}))
@@ -292,7 +309,7 @@ class BackupManager:
                 class IdleCancel:
                     def is_set(self):
                         idle=idle_seconds() if manager.scheduled else None
-                        return manager.cancel.is_set() or manager.scheduled and (idle is None or idle<config['idle_minutes']*60)
+                        return manager.cancel.is_set() or manager.scheduled and (not power_allowed(config) or config['idle_required'] and (idle is None or idle<config['idle_minutes']*60))
                     def wait(self,seconds):
                         end=time.monotonic()+seconds
                         while time.monotonic()<end:
@@ -304,7 +321,15 @@ class BackupManager:
                 slot.update(result);slot.update(uploaded_sha256=slot['sha256'],uploaded_folder=config['folder_id'],uploaded_at=time.time());slot.pop('session',None);save_private(self.state_path,state)
         if upload:state.update(baseline=files,baseline_destination=delivery,last_fingerprint=fingerprint,last_success=time.time())
         else:state.update(local_baseline=files,last_local=time.time())
+        if config['cleanup_extras']:state['cleanup']=self.cleanup(config,state,modes)
         save_private(self.state_path,state);self.update(phase='Copied to Google Drive folder' if upload and config['route']=='desktop' else 'Backups up to date' if upload else 'Local ZIPs ready',done=1,total=1,message='Google Drive for desktop handles uploading; check its sync status.' if upload and config['route']=='desktop' else 'Saved in '+str(self.folder),warning=(str(len(missing))+' file/path references could not be resolved locally. These can include example paths in saved code; discovered attachment files are included.' if missing else ''),force=True)
+    def cleanup(self,config=None,state=None,modes=None):
+        if config is None and self.status()['running']:raise ValueError('Wait for the current backup or import before cleaning up ZIPs.')
+        config=config or self.config();state=state or self.state();modes=modes or (['full','progress'] if config['modes']=='both' else [config['modes']])
+        owned=[v.get('path') for v in state.get('slots',{}).values()]
+        moved=retire_extras(config['local_folder'],modes,owned)
+        if config['route']=='desktop' and config['sync_folder']:moved+=retire_extras(config['sync_folder'],modes)
+        return dict(retired=sum(not p.startswith('deduplicated:') for p in moved),deduplicated=sum(p.startswith('deduplicated:') for p in moved),paths=moved)
     def import_zip(self,path,restore_settings=False):
         if self.worker and self.worker.is_alive():raise ValueError('Wait for the current backup or import to finish.')
         path=Path(path).expanduser().resolve()
@@ -312,7 +337,7 @@ class BackupManager:
         self.cancel.clear();self.scheduled=False
         def run():
             try:
-                with job_lock(self.data/'backup.lock'):
+                with job_lock(self.lock_path):
                     root=self.data/'imports'/uuid.uuid4().hex;(self.data/'imports').mkdir(exist_ok=True);extract_zip(path,root,self.update,self.check)
                     mappings={}
                     if (root/'backup-manifest.json').exists():
@@ -339,27 +364,29 @@ class BackupManager:
                     if self.archive.ui_cache is not None:
                         catalog=self.archive.catalog()
                         with self.archive.ui_cache_lock:
-                            self.archive.ui_cache['chats'].update({c['id']:c for c in catalog});self.archive.ui_cache['coverage']=self.archive.coverage();self.archive.ui_cache['revision']+=1
+                            self.archive.ui_cache['chats'].update({c['id']:c for c in catalog});self.archive.ui_cache['coverage']=self.archive.coverage();self.archive.ui_cache['revision']+=1;self.archive.ui_delta_floor=self.archive.ui_cache['revision']
                     state=self.state();state['last_import']=dict(at=time.time(),indexed=indexed,kept_newer=skipped);save_private(self.state_path,state);self.update(phase='Import complete',done=1,total=1,message=f'{indexed} new or newer conversations integrated; {skipped} existing newer copies kept.',force=True)
             except Exception as e:self.update(phase='Import needs attention',error=str(e),force=True)
         self.worker=threading.Thread(target=run,daemon=True);self.worker.start();return {'started':True}
     def due(self):
         config=self.config();seconds=idle_seconds();state=self.state()
-        return config['enabled'] and self.ready(config) and seconds is not None and seconds>=config['idle_minutes']*60 and time.time()-state.get('last_success',0)>= (7*86400 if config['cadence']=='weekly' else 86400)
+        return config['enabled'] and (not config['auto_upload'] or self.ready(config)) and power_allowed(config) and (not config['idle_required'] or seconds is not None and seconds>=config['idle_minutes']*60) and time.time()-state.get('last_success' if config['auto_upload'] else 'last_local',0)>=interval_seconds(config)
     def start_scheduler(self):
         def loop():
             while not self.stop.wait(60):
                 try:
-                    if self.due() and not (self.worker and self.worker.is_alive()):self.start(scheduled=True)
+                    if self.due() and not (self.worker and self.worker.is_alive()):self.start(upload=self.config()['auto_upload'],scheduled=True)
                 except Exception:pass
         threading.Thread(target=loop,daemon=True).start()
     def schedule(self,enabled):
         config=self.config()
-        if enabled and (not config['source'] or not self.ready(config)):raise ValueError('Choose the export folder and a Google Drive for desktop folder, or set up the optional direct account connection, before enabling scheduled backups.')
+        if enabled and (not config['source'] or config['auto_upload'] and not self.ready(config)):raise ValueError('Choose the export folder and a Google Drive for desktop folder, or set up the optional direct account connection, before enabling scheduled backups.')
         if os.name!='nt':
             if enabled:raise ValueError('Backups while the viewer is closed currently require Windows. Manual backups remain available.')
-            config['enabled']=False;write_json(self.config_path,config);return config
-        name='OfflineChatViewerBackup-'+hashlib.sha256(str(self.data.resolve()).encode()).hexdigest()[:12]
+            config['enabled']=False;write_json(self.config_path,config)
+            if self.archive.profile:self.archive.profile.update(backup={k:v for k,v in config.items() if k!='task_name'})
+            return config
+        name='OfflineChatViewerBackup-'+hashlib.sha256(str(self.archive.profile.path if self.archive.profile else self.data.resolve()).encode()).hexdigest()[:12]
         if enabled:
             import xml.etree.ElementTree as ET
             ns='http://schemas.microsoft.com/windows/2004/02/mit/task';ET.register_namespace('',ns)
@@ -368,15 +395,17 @@ class BackupManager:
                 e=ET.SubElement(parent,'{'+ns+'}'+name,attrs)
                 if text is not None:e.text=str(text)
                 return e
-            triggers=add(task,'Triggers');trigger=add(triggers,'CalendarTrigger');repeat=add(trigger,'Repetition');add(repeat,'Interval','PT1H');add(repeat,'Duration','P1D');add(repeat,'StopAtDurationEnd','false');add(trigger,'StartBoundary',datetime.datetime.now().replace(hour=0,minute=0,second=0,microsecond=0).isoformat());add(trigger,'Enabled','true');daily=add(trigger,'ScheduleByDay');add(daily,'DaysInterval','1')
+            triggers=add(task,'Triggers');trigger=add(triggers,'CalendarTrigger');repeat=add(trigger,'Repetition');add(repeat,'Interval','PT5M');add(repeat,'Duration','P1D');add(repeat,'StopAtDurationEnd','false');add(trigger,'StartBoundary',datetime.datetime.now().replace(hour=0,minute=0,second=0,microsecond=0).isoformat());add(trigger,'Enabled','true');daily=add(trigger,'ScheduleByDay');add(daily,'DaysInterval','1')
             principals=add(task,'Principals');principal=add(principals,'Principal',id='User');add(principal,'UserId',os.environ.get('USERDOMAIN','')+'\\'+os.environ.get('USERNAME',''));add(principal,'LogonType','InteractiveToken');add(principal,'RunLevel','LeastPrivilege')
-            options=add(task,'Settings');add(options,'MultipleInstancesPolicy','IgnoreNew');add(options,'DisallowStartIfOnBatteries','true');add(options,'StopIfGoingOnBatteries','true');add(options,'StartWhenAvailable','true');idle=add(options,'IdleSettings');add(idle,'Duration',f"PT{config['idle_minutes']}M");add(idle,'WaitTimeout','PT23H');add(idle,'StopOnIdleEnd','true');add(idle,'RestartOnIdle','true');add(options,'RunOnlyIfIdle','true');add(options,'ExecutionTimeLimit','PT12H');add(options,'Enabled','true')
+            options=add(task,'Settings');add(options,'MultipleInstancesPolicy','IgnoreNew');add(options,'DisallowStartIfOnBatteries',str(config['ac_only']).lower());add(options,'StopIfGoingOnBatteries',str(config['ac_only']).lower());add(options,'StartWhenAvailable','true');idle=add(options,'IdleSettings');add(idle,'Duration',f"PT{config['idle_minutes']}M");add(idle,'WaitTimeout','PT23H');add(idle,'StopOnIdleEnd',str(config['idle_required']).lower());add(idle,'RestartOnIdle','true');add(options,'RunOnlyIfIdle',str(config['idle_required']).lower());add(options,'ExecutionTimeLimit','PT12H');add(options,'Enabled','true')
             actions=add(task,'Actions',Context='User');execute=add(actions,'Exec');python=self.app/'runtime/pythonw.exe'
             if not python.exists():python=self.app/'runtime/python.exe'
-            add(execute,'Command',str(python));add(execute,'Arguments',subprocess.list2cmdline([str(self.app/'backup_job.py'),'--data-dir',str(self.data),'--scheduled']));add(execute,'WorkingDirectory',str(self.app))
+            add(execute,'Command',str(python));add(execute,'Arguments',subprocess.list2cmdline([str(self.app/'backup_job.py'),'--data-dir',str(self.data),'--scheduled']+(['--profile',str(self.archive.profile.path)] if self.archive.profile else [])));add(execute,'WorkingDirectory',str(self.app))
             xml=self.data/'backup-task.xml';ET.ElementTree(task).write(xml,encoding='utf-16',xml_declaration=True);command=['schtasks.exe','/Create','/TN',name,'/XML',str(xml),'/F']
         else:command=['schtasks.exe','/Delete','/TN',name,'/F']
         result=subprocess.run(command,capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW)
         if result.returncode and enabled:raise ValueError('Windows could not register the idle backup task. Keep the viewer open for scheduled backups, or check Task Scheduler permissions.')
-        config['enabled']=bool(enabled);config['task_name']=name;write_json(self.config_path,config);return config
+        config['enabled']=bool(enabled);config['task_name']=name;write_json(self.config_path,config)
+        if self.archive.profile:self.archive.profile.update(backup={k:v for k,v in config.items() if k!='task_name'})
+        return config
     def close(self):self.stop.set();self.cancel.set()

@@ -5,12 +5,16 @@ from viewer import Archive
 from archive_backup import BackupManager,job_lock
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--data-dir',required=True);p.add_argument('--scheduled',action='store_true');args=p.parse_args()
-    archive=Archive(args.data_dir,background_process=False);manager=BackupManager(archive,Path(__file__).parent)
+    p=argparse.ArgumentParser();p.add_argument('--data-dir',required=True);p.add_argument('--scheduled',action='store_true');p.add_argument('--profile');args=p.parse_args()
+    archive=Archive(args.data_dir,background_process=False)
+    if args.profile:
+        from preferences import attach
+        attach(archive,args.profile)
+    manager=BackupManager(archive,Path(__file__).parent)
     try:
         if args.scheduled and not manager.due():return
         manager.scheduled=args.scheduled
-        with job_lock(manager.data/'backup.lock'):manager.run(upload=True)
+        with job_lock(manager.lock_path):manager.run(upload=manager.config()['auto_upload'])
     except Exception as e:manager.update(phase='Waiting' if isinstance(e,InterruptedError) else 'Needs attention',error=str(e),force=True)
     finally:manager.close();archive.close()
 

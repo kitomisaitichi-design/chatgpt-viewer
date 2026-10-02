@@ -12,15 +12,15 @@ def drive_suggestion(roots=None,refresh=False):
         roots=[Path(letter+':/') for letter in 'GABCDEFGHIJKLMNOPQRSTUVWX YZ'.replace(' ','') if letters & (1<<(ord(letter)-65))]
         roots=list(dict.fromkeys(roots))
         home=Path.home()
-        roots.extend([home/'Google Drive',home/'My Drive'])
+        roots.extend([home/'Google Drive',home/'GoogleDrive',home/'My Drive'])
     found=[]
     for root in roots:
         root=Path(root)
-        candidate=root if root.name in ('My Drive','Google Drive') else root/'My Drive'
+        candidate=root if root.name in ('My Drive','Google Drive','GoogleDrive') else root/'My Drive'
         try:
-            if candidate.is_dir():found.append(candidate)
+            if candidate.is_dir() and candidate not in found:found.append(candidate)
         except OSError:continue
-    result={'available':bool(found),'root':str(found[0]) if found else '',
+    result={'available':bool(found),'root':str(found[0]) if found else '', 'roots':[str(p) for p in found],
             'sync_folder':str(found[0]/'Offline Chat Viewer Backups') if found else '',
             'message':'Drive for desktop found. Completed ZIPs can be copied to a dedicated backup folder.' if found else 'Drive for desktop was not found. Mount your Drive, then scan again, or choose your synced folder.'}
     if system_roots:_drive_cache=(time.monotonic(),dict(result))

@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.1.2
+OFFLINE CHAT VIEWER v1.1.3
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
@@ -82,3 +82,7 @@ Create local ZIPs is at the top of Backups & Drive. Download links show sizes.
 Copy folder paths with the copy icon. Open local ZIP folder opens Explorer
 without saving other settings. Browse uses the modern Windows folder picker.
 Brief Windows progress-file locks are retried; unchanged attachment links are cached.
+
+
+VERSION 1.1.3
+Preferences automatically follow new installs for the same Windows user. Keep .viewer-data when updating to preserve the index. Conversation menus include colours and reversible Trash. Backups support every 1-168 hours, optional idle/AC-power conditions and local-only delivery. Extra distinct viewer ZIPs move to .retired-viewer-backups; exact duplicate copies can be removed. Automatic backups remain off until you enable and save them.
