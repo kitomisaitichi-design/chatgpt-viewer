@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.viewer-data/
+.semantic/
+Backups/
+dist/
+VIEWER-DIAGNOSTICS.json

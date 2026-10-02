@@ -1,12 +1,11 @@
-# Offline Chat Viewer · v1.1.3
+# Offline Chat Viewer · v1.1.4
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.3-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.3/Offline-Chat-Viewer-v1.1.3-Windows.zip)
-- **Size:** 14,882,831 bytes
-- **SHA-256:** `2dd17da16f9b1af2956c3ca64cf5e4b2ec3e2df34f13a923fec1ab967e08ca92`
+- **Download:** [Offline-Chat-Viewer-v1.1.4-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.4/Offline-Chat-Viewer-v1.1.4-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.4/Offline-Chat-Viewer-v1.1.4-Windows.zip.sha256.txt)
 
 ## Start on Windows / Edge
 
@@ -23,6 +22,16 @@ If Edge is not your default browser, copy the launch URL printed in the console 
 Closing the console stops the server. Settings → Stop viewer also stops it. Double-click the launcher to reopen. The bundled runtime is Windows x64; macOS/Linux can use Python 3.10+ with `python3 viewer.py` or START-VIEWER.command. Windows ARM64 can use its x64 emulation or a full Python installation.
 
 When updating, close the old viewer console, replace the app files, **keep `.viewer-data`**, and reopen START-VIEWER.bat. Your existing index and organization remain available. Type corrections update automatically without rebuilding message contents. If loading still stalls, run **CHECK-VIEWER.bat** while the viewer is open and attach **VIEWER-DIAGNOSTICS.json**. The report includes response lengths, received bytes, and transfer timings, with no conversation text, titles, folder paths, or session tokens.
+
+## Files & Library · v1.1.4
+
+Select the root of a [ChatGPT Exporter 2.4.1](https://github.com/kitomisaitichi-design/chatgpt-exporter/releases/tag/ChatGPT2.4.1) backup under **Export folders**, then open **Files & Library**. Search filenames and IDs; filter saved/manual/attention items or the selected chat. Saved files download locally; raster images may open inline. Source chat buttons open the matching archived conversation. File catalogs are read separately from message indexes, so Refresh detects new exporter catalog entries and imported copies without rebuilding chats.
+
+The exporter automatically downloads Library files strictly below **10,000,000 bytes**. For larger files, follow **Find in ChatGPT**, download the original, then click **Import downloaded copy**. The Viewer checks the known size and checksum, rejects service-error files, and copies the file into its stable expected backup path. Existing copies are kept. Imported files become available locally immediately and remain included in ordinary full-folder backups. Older exporter catalogs can show saved attachments; update the exporter for manual import paths.
+
+Files remain bounded to the selected backup root. HTML, SVG and executable content download as attachments. Large downloads stream in 128 KiB chunks. Updating preserves `.viewer-data`, shared preferences and backup/Drive configuration.
+
+Validation: **162 backend tests** and an isolated exporter-to-viewer Edge integration test, including manual import of a **10,000,000-byte** file, a byte-identical local download, Stop/resume and source-chat navigation. Website responses were simulated; live ChatGPT Library compatibility remains unverified.
 
 ## Improvements in v1.1.3
 

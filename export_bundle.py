@@ -5,7 +5,7 @@ from pathlib import Path
 from discovery import SKIP_LOWER,iter_documents
 
 ASSET_DIRS={'attachments','files','images','downloads','assets'}
-META={'conversation-index.json','portable-state.json','export-report.json'}
+META={'conversation-index.json','portable-state.json','export-report.json','viewer-handoff.json'}
 def is_asset(relative):return any(part.lower() in ASSET_DIRS for part in Path(relative).parts[:-1])
 def documents(start,root,event,app,exclude=()):
     status={'errors':[]};result=list(iter_documents(start,root,event,status,app,exclude))

@@ -13,7 +13,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.3'
+VERSION = '1.1.4'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -1109,6 +1109,8 @@ class Server(ThreadingHTTPServer):
         self.transfer_lock=threading.Lock();self.transfers={};self.recent_transfers=[];self.renderer_cache={}
         from archive_backup import BackupManager
         self.backup=BackupManager(archive,APP)
+        from library_files import FileCatalog
+        self.files=FileCatalog(archive)
     def transfer_status(self):
         with self.transfer_lock:
             active=[dict(r,elapsed_ms=round((time.monotonic()-r['started'])*1000)) for r in self.transfers.values()]
@@ -1174,6 +1176,17 @@ class Handler(BaseHTTPRequestHandler):
                 with path.open('rb') as file:
                     self.send_response(200);self.send_header('Content-Type','application/zip');self.send_header('Content-Length',str(path.stat().st_size));self.send_header('Content-Disposition','attachment; filename="'+path.name+'"');self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.end_headers()
                     while part:=file.read(128*1024):self.wfile.write(part)
+                return
+            if url.path=='/api/files':
+                self.send(self.server.files.list(q.get('search',''),q.get('status','all'),q.get('conversation',''),q.get('offset',0),q.get('limit',50)));return
+            if url.path=='/api/files/content':
+                from library_files import IMAGE_EXT
+                f,entry=self.server.files.file(q.get('key',''));inline=q.get('inline')=='1' and f.suffix.lower() in IMAGE_EXT
+                with f.open('rb') as stream:
+                    self.send_response(200);self.send_header('Content-Type',(mimetypes.guess_type(f.name)[0] or 'application/octet-stream') if inline else 'application/octet-stream');self.send_header('Content-Length',str(os.fstat(stream.fileno()).st_size));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'none'; sandbox")
+                    if not inline:self.send_header('Content-Disposition',"attachment; filename*=UTF-8''"+urllib.parse.quote(f.name))
+                    self.end_headers()
+                    while part:=stream.read(128*1024):self.wfile.write(part)
                 return
             if url.path=='/api/health':self.send(dict(ok=True,version=VERSION,pid=os.getpid(),scanning=a.status.get('scanning',False),transfers=self.server.transfer_status()));return
             if url.path=='/api/state':self.send(a.state(q.get('since'),5,q.get('priority','')));return
@@ -1245,7 +1258,11 @@ class Handler(BaseHTTPRequestHandler):
             length=int(self.headers.get('Content-Length','0'))
             if length>2*1024*1024:raise ValueError('Request too large')
             d=json.loads(self.rfile.read(length) or '{}');a=self.server.archive
-            if self.path=='/api/scan':a.request_scan(d['path'],d.get('up',2))
+            if self.path=='/api/files/import':self.send({'entry':self.server.files.import_copy(d.get('key',''),d.get('path',''))});return
+            elif self.path=='/api/files/pick':
+                from library_files import pick_downloaded_file
+                self.send({'path':pick_downloaded_file()});return
+            elif self.path=='/api/scan':a.request_scan(d['path'],d.get('up',2))
             elif self.path=='/api/stop-scan':a.stop_scan()
             elif self.path=='/api/pick-folder':
                 if os.name=='nt':

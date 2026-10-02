@@ -1,0 +1,42 @@
+name: Publish portable Viewer release
+on:
+  push:
+    branches: [main]
+    paths: [viewer.py, .github/workflows/release.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: viewer-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out triggering commit
+        env:
+          REPOSITORY: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          git init .
+          git remote add origin "https://github.com/$REPOSITORY.git"
+          git fetch --depth=1 origin "$COMMIT"
+          git checkout --detach FETCH_HEAD
+      - name: Run backend tests
+        run: python3 -m unittest discover -s tests -q
+      - name: Build and publish ZIP and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          python3 scripts/package-release.py
+          VERSION=$(python3 -c "import viewer; print(viewer.VERSION)")
+          TAG="v$VERSION"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release already exists; published files were kept."
+            exit 0
+          fi
+          gh release create "$TAG" --target "$COMMIT" --title "Offline Chat Viewer $VERSION" --notes-file "release-notes/v$VERSION.md" --draft
+          gh release upload "$TAG" "dist/Offline-Chat-Viewer-v$VERSION-Windows.zip" "dist/Offline-Chat-Viewer-v$VERSION-Windows.zip.sha256.txt"
+          gh release edit "$TAG" --draft=false --latest

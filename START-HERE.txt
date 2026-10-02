@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.1.3
+OFFLINE CHAT VIEWER v1.1.4
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
@@ -86,3 +86,6 @@ Brief Windows progress-file locks are retried; unchanged attachment links are ca
 
 VERSION 1.1.3
 Preferences automatically follow new installs for the same Windows user. Keep .viewer-data when updating to preserve the index. Conversation menus include colours and reversible Trash. Backups support every 1-168 hours, optional idle/AC-power conditions and local-only delivery. Extra distinct viewer ZIPs move to .retired-viewer-backups; exact duplicate copies can be removed. Automatic backups remain off until you enable and save them.
+
+VERSION 1.1.4: FILES & LIBRARY
+Open Files & Library to search saved attachments and Library files, download local copies, and open source chats. Use ChatGPT Exporter 2.4.1 for manual download paths. Download files of 10 MB or more in ChatGPT, then import the downloaded copy into your backup. File availability refreshes without rebuilding chats. Keep .viewer-data when updating.
