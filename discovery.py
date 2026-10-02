@@ -5,7 +5,7 @@ SKIP = {'.git','.svn','node_modules','__pycache__','.viewer-data','.venv','venv'
         'Windows','Program Files','Program Files (x86)','$Recycle.Bin','System Volume Information',
         'AppData','.cache','.npm','.local','exporter-source',
         '.semantic-env','.semantic-packages','.semantic-staging','.semantic-cache','.semantic-old'}
-SKIP_LOWER={s.lower() for s in SKIP}|{'attachments','attachment-errors'}
+SKIP_LOWER={s.lower() for s in SKIP}|{'attachments','attachment-errors','files','images','assets','html'}
 def scan_boundary(start,up=0):
     start=Path(start).expanduser().resolve()
     if not start.is_dir():raise ValueError('Choose an existing folder.')

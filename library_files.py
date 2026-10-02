@@ -1,6 +1,7 @@
 """Read exporter file catalogs, with bounded paths and streaming file delivery."""
 import hashlib,json,mimetypes,os,shutil,tempfile,threading,time
 from pathlib import Path,PurePosixPath
+from exporter_bridge import entries as exporter_entries
 
 IMAGE_EXT={'.png','.jpg','.jpeg','.gif','.webp','.avif','.bmp'}
 META_LIMIT=32*1024*1024
@@ -33,9 +34,10 @@ class FileCatalog:
         imports=self.archive.data_dir/'imports'
         if imports.is_dir():
             for p in imports.glob('*/conversation-index.json'):roots.add(p.parent.resolve())
+            for p in imports.glob('*/attachments/library-index.json'):roots.add(p.parent.parent.resolve())
         out=[]
         for root in roots:
-            for relative in ('conversation-index.json','attachments/library-index.json'):
+            for relative in ('portable-state.json','conversation-index.json','attachments/library-index.json'):
                 path=root/relative
                 if path.is_file():out.append((root,path))
         return sorted(out,key=lambda x:str(x[1]))
@@ -51,7 +53,7 @@ class FileCatalog:
             if not isinstance(data,dict):notes.append('Cannot read file catalog: '+path.name);continue
             library=path.name=='library-index.json'
             if library and data.get('schema')!='chatgpt-library-index/v1':notes.append('Unknown Library index format: '+str(path));continue
-            rows=data.get('entries',[])
+            rows=data.get('entries',[]) if library else exporter_entries(data)
             if not isinstance(rows,list):continue
             items=[]
             for row in rows:

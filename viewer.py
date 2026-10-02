@@ -8,12 +8,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from chat_types import surface_signal, source_surface_hint, source_header, canonical_kind, prefer_signal, free_account
 from source_reader import SourceReader, page_rows, native_conversation
+from exporter_bridge import entries as exporter_entries, normalize_entry, attachment_records, inspect_folder
 
 APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.4'
+VERSION = '1.1.5'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -254,7 +255,9 @@ def parse_json(data,path,leaf=None):
             if free_account(data):turn['is_free_account']=True
             signal=prefer_signal(signal,surface_signal(turn))
     kind,evidence=signal or ('chat','No saved Work/Codex product marker')
-    return dict(id=cid,title=data.get('title') or path.stem,created=epoch(data.get('create_time')),updated=epoch(data.get('update_time')),kind=kind,kind_evidence=evidence,project=data.get('project') or '',url=data.get('url') or ('' if cid.startswith('local-') else 'https://chatgpt.com/c/'+urllib.parse.quote(cid)),messages=messages)
+    project=data.get('project') or ''
+    if isinstance(project,dict):project=project.get('title') or project.get('name') or ''
+    return dict(id=cid,title=data.get('title') or path.stem,created=epoch(data.get('create_time')),updated=epoch(data.get('update_time')),kind=kind,kind_evidence=evidence,project=project,pinned=bool(data.get('is_starred') or data.get('pinned_time')),url=data.get('url') or ('' if cid.startswith('local-') else 'https://chatgpt.com/c/'+urllib.parse.quote(cid)),messages=messages)
 
 def infer_id(path):
     m=re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',path.stem,re.I)
@@ -618,6 +621,8 @@ class Archive:
             examples=[dict(id=r['cid'],title=json.loads(r['metadata']).get('title') or r['cid']) for r in db.execute('SELECT cid,metadata FROM manifest_entries') if r['cid'] in missing][:8]
             return dict(expected=len(expected),indexed=len(ready),available=len(ready|available),missing=len(missing),examples=examples)
     def register_manifest(self,entry,manifest,root):
+        entry=normalize_entry(entry)
+        if not entry:return
         cid=entry['id'];path='';available=False
         for key in ('json','markdown'):
             value=entry.get(key)
@@ -632,7 +637,7 @@ class Archive:
             if old and tuple(old)==(metadata,path,int(available)):return
             db.execute('INSERT OR REPLACE INTO manifest_entries VALUES(?,?,?,?,?)',(cid,str(manifest),metadata,path,int(available)))
         self.revision+=1
-        if available:
+        if available and not self.live_sources.get(cid,{}).get('loaded'):
             self.live_sources[cid]=dict(id=cid,title=entry.get('title') or Path(path).stem,url=entry.get('url') or 'https://chatgpt.com/c/'+cid,created=epoch(entry.get('create_time')),updated=epoch(entry.get('update_time')),kind=signal[0] if signal else 'chat',kind_evidence=signal[1] if signal else 'No saved Work/Codex product marker',project=entry.get('project') if isinstance(entry.get('project'),str) else '',path=path,fingerprint='',count=0,folder=str(Path(path).parent.relative_to(root)),loaded=False)
 
     @staticmethod
@@ -744,9 +749,8 @@ class Archive:
                         elif not ismeta and record and record['fingerprint']==fp and record['status']=='ignored':
                             self.status['cached']+=1
                         elif ismeta:
-                            d=json.loads(f.read_text(encoding='utf-8-sig'));entries=d.get('entries') or (d.get('job') or {}).get('entries') or []
-                            if isinstance(entries,dict):entries=entries.values()
-                            for e in entries:
+                            d=json.loads(f.read_text(encoding='utf-8-sig'))
+                            for e in exporter_entries(d):
                                 if event.is_set():break
                                 if isinstance(e,dict) and e.get('id'):
                                     self.yield_background();metadata[e['id']]=e;self.register_manifest(e,f,root);self.enrich(e['id'],e)
@@ -780,18 +784,20 @@ class Archive:
                 self.status['scanning']=False;self.status['current_file']=''
     def enrich(self,cid,meta):
         if not meta:return
+        meta=normalize_entry(meta,cid) or meta
         signal=surface_signal(meta)
         kind,evidence=signal or (None,'')
         project=meta.get('project') or '';project=project.get('title') or project.get('name') or '' if isinstance(project,dict) else project
         with self.lock,self.connect() as db:
-            existing=db.execute('SELECT kind,kind_evidence FROM chats WHERE id=?',(cid,)).fetchone()
+            existing=db.execute('SELECT kind,kind_evidence,updated,path FROM chats WHERE id=?',(cid,)).fetchone()
             if existing and kind:
                 kind,evidence=prefer_signal((existing['kind'],existing['kind_evidence']),signal)
             if kind:db.execute('UPDATE chats SET kind=?,kind_evidence=? WHERE id=? AND (kind IS NOT ? OR kind_evidence IS NOT ?)',(kind,evidence,cid,kind,evidence))
             if project:db.execute('UPDATE chats SET project=? WHERE id=? AND project IS NOT ?',(project,cid,project))
             for k,mk in [('created','create_time'),('updated','update_time')]:
-                if meta.get(mk):db.execute('UPDATE chats SET '+k+'=? WHERE id=? AND '+k+' IS NOT ?',(epoch(meta[mk]),cid,epoch(meta[mk])))
+                if meta.get(mk) and not (k=='updated' and existing and Path(existing['path']).suffix.lower()!='.md' and epoch(meta[mk])<existing['updated']):db.execute('UPDATE chats SET '+k+'=? WHERE id=? AND '+k+' IS NOT ?',(epoch(meta[mk]),cid,epoch(meta[mk])))
             if meta.get('url'):db.execute('UPDATE chats SET url=? WHERE id=? AND url IS NOT ?',(meta['url'],cid,meta['url']))
+            if meta.get('is_starred') or meta.get('pinned') or meta.get('pinned_time'):db.execute('INSERT OR IGNORE INTO organization(cid,pinned) VALUES(?,1)',(cid,))
             changed=db.total_changes
         if changed:self.revision+=1
         if cid in self.live_sources:
@@ -799,7 +805,7 @@ class Archive:
             if kind:c.update(kind=kind,kind_evidence=evidence)
             if project:c['project']=project
             for k in ('create_time','update_time'):
-                if meta.get(k):c['created' if k=='create_time' else 'updated']=epoch(meta[k])
+                if meta.get(k) and not (k=='update_time' and Path(c['path']).suffix.lower()!='.md' and epoch(meta[k])<c.get('updated',0)):c['created' if k=='create_time' else 'updated']=epoch(meta[k])
             if meta.get('url'):c['url']=meta['url']
     def store(self,item,path,fp,root,meta):
         cid=item['id'];msgs=item['messages'];project=item.get('project')
@@ -817,6 +823,7 @@ class Archive:
             db.execute('INSERT OR REPLACE INTO title_rows VALUES(?,?)',(cid,title.lastrowid))
             db.execute('DELETE FROM messages WHERE cid=?',(cid,));db.execute('DELETE FROM chunks WHERE rowid IN (SELECT rowid FROM chunk_rows WHERE cid=?)',(cid,));db.execute('DELETE FROM chunk_rows WHERE cid=?',(cid,));db.execute('DELETE FROM vectors WHERE cid=?',(cid,))
             db.execute('INSERT OR REPLACE INTO chats(id,title,url,created,updated,kind,project,path,fingerprint,count,folder,kind_evidence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(cid,item['title'],item['url'],created,updated,canonical_kind(item['kind']),project,str(path),fp,len(msgs),str(path.parent.relative_to(root)),item.get('kind_evidence','')))
+            if item.get('pinned'):db.execute('INSERT OR IGNORE INTO organization(cid,pinned) VALUES(?,1)',(cid,))
             for seq,m in enumerate(msgs):
                 if seq%20==0:self.yield_background()
                 db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?,?)',(cid,seq,m['role'],m['channel'],m['text'],m['time'],m['visible'],json.dumps(m.get('extras') or {},ensure_ascii=False)))
@@ -988,7 +995,7 @@ class Archive:
                 out.append(dict(cid=r['cid'],seq=r['seq'],title=message['title'],snippet=parts[part][:350],score=score))
                 if len(out)>=60:break
         return out
-    def asset(self,cid,relative):
+    def asset(self,cid,relative,indexed=True):
         if self.ui_cache is not None and cid in self.ui_cache['chats']:r={'path':self.ui_cache['chats'][cid]['path']}
         else:
             with self.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(cid,cid)).fetchone()
@@ -997,7 +1004,7 @@ class Archive:
         if rel.startswith(('http:','https:','data:','javascript:','file:')):raise ValueError('Only exported local files can be opened here.')
         roots=[p.parent]
         imports=self.data_dir/'imports'
-        if p.resolve().is_relative_to(imports.resolve()):roots.append(imports)
+        if p.resolve().is_relative_to(imports.resolve()):roots.append(imports/p.resolve().relative_to(imports.resolve()).parts[0])
         settings=self.settings();start=settings.get('scan_start')
         if start:
             base=Path(start).resolve()
@@ -1006,8 +1013,31 @@ class Archive:
                 base=base.parent
             roots.append(base)
         f=(p.parent/rel).resolve()
-        if not any(f.is_relative_to(x.resolve()) for x in roots) or not f.is_file():raise FileNotFoundError('Local attachment was not found within the scanned folder.')
+        if not any(f.is_relative_to(x.resolve()) for x in roots) or not f.is_file():
+            # Exporter indexes use paths relative to their export root, while MD
+            # files usually use ../attachments. Only indexed files get this fallback.
+            match=next((x for x in self.saved_files(cid) if x['available'] and x['relative']==rel),None) if indexed else None
+            if not match:raise FileNotFoundError('Local attachment was not found within the scanned folder.')
+            f=Path(match['path'])
         return f
+
+    def saved_files(self,cid):
+        with self.connect() as db:
+            rows=db.execute('SELECT manifest,metadata FROM manifest_entries WHERE cid=?',(cid,)).fetchall()
+            linked=db.execute("SELECT substr(text,1,262144) AS text FROM messages WHERE cid=? AND (text LIKE '%](%' OR text LIKE '%src=%') LIMIT 100",(cid,)).fetchall()
+        files={}
+        for row in rows:
+            for item in attachment_records(json.loads(row['metadata']),Path(row['manifest']).parent):
+                key=item['path'] or item['id'] or item['name']
+                if key not in files or item['available']:files[key]=item
+        from archive_backup import local_links
+        for row in linked:
+            for relative in local_links(row['text'][:256*1024]):
+                try:
+                    path=self.asset(cid,relative,indexed=False);key=str(path)
+                    if key not in files:files[key]=dict(id='',name=path.name,path=key,relative=relative,available=True,status='saved',size=path.stat().st_size,mime=mimetypes.guess_type(path.name)[0] or '')
+                except (ValueError,OSError):pass
+        return list(files.values())[:1000]
 
 CONCEPTS=[{'food','nutrition','diet','meal','eating'},{'weather','forecast','rain','temperature','humidity'},
  {'energy','electricity','power','fuel','oil','exergy'},{'scarcity','shortage','collapse','fragility','risk'},
@@ -1157,6 +1187,12 @@ class Handler(BaseHTTPRequestHandler):
         except http.cookies.CookieError:return False
         token=cookies.get(self.server.cookie_name) or cookies.get('viewer_token')
         return bool(token and secrets.compare_digest(token.value,self.server.token))
+    def stream_file(self,path,inline=False):
+        with path.open('rb') as stream:
+            self.send_response(200);self.send_header('Content-Type',(mimetypes.guess_type(path.name)[0] or 'application/octet-stream') if inline else 'application/octet-stream');self.send_header('Content-Length',str(os.fstat(stream.fileno()).st_size));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'none'; sandbox")
+            if not inline:self.send_header('Content-Disposition',"attachment; filename*=UTF-8''"+urllib.parse.quote(path.name))
+            self.end_headers()
+            while part:=stream.read(128*1024):self.wfile.write(part)
     def do_GET(self):
         try:
             url=urllib.parse.urlsplit(self.path);q={k:v[-1] for k,v in urllib.parse.parse_qs(url.query).items()}
@@ -1182,15 +1218,19 @@ class Handler(BaseHTTPRequestHandler):
             if url.path=='/api/files/content':
                 from library_files import IMAGE_EXT
                 f,entry=self.server.files.file(q.get('key',''));inline=q.get('inline')=='1' and f.suffix.lower() in IMAGE_EXT
-                with f.open('rb') as stream:
-                    self.send_response(200);self.send_header('Content-Type',(mimetypes.guess_type(f.name)[0] or 'application/octet-stream') if inline else 'application/octet-stream');self.send_header('Content-Length',str(os.fstat(stream.fileno()).st_size));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'none'; sandbox")
-                    if not inline:self.send_header('Content-Disposition',"attachment; filename*=UTF-8''"+urllib.parse.quote(f.name))
-                    self.end_headers()
-                    while part:=stream.read(128*1024):self.wfile.write(part)
+                self.stream_file(f,inline)
                 return
             if url.path=='/api/health':self.send(dict(ok=True,version=VERSION,pid=os.getpid(),scanning=a.status.get('scanning',False),transfers=self.server.transfer_status()));return
             if url.path=='/api/state':self.send(a.state(q.get('since'),5,q.get('priority','')));return
             if url.path=='/api/catalog':self.send(a.catalog_batch(q.get('offset',0),q.get('limit',25),q.get('priority','')));return
+            if url.path=='/api/export-inspect':self.send(inspect_folder(q['path']));return
+            if url.path=='/api/saved-files':self.send(dict(files=a.saved_files(q['id'])));return
+            if url.path=='/api/file-preview':
+                f=a.asset(q['id'],q['path'])
+                if f.suffix.lower() not in ('.txt','.md','.json','.csv','.log','.py','.js','.ts','.css','.html','.xml','.yaml','.yml','.toml','.sh','.ps1'):raise ValueError('Download this file to open it in its own application.')
+                with f.open('rb') as source:part=source.read(32769)
+                if b'\x00' in part:raise ValueError('This file contains binary data. Download it to open it.')
+                self.send(dict(text=part[:32768].decode('utf-8-sig',errors='replace'),truncated=len(part)>32768,name=f.name));return
             if url.path=='/api/message-text':
                 with a.foreground_read():self.send(a.message_fragment(q['id'],q['seq'],q.get('offset',0),q.get('leaf'),q.get('bytes',24576)))
                 return
@@ -1246,7 +1286,7 @@ class Handler(BaseHTTPRequestHandler):
                 f=a.asset(q['id'],q['path']);ctype=mimetypes.guess_type(f.name)[0] or 'application/octet-stream'
                 # Exported HTML/SVG/code always downloads; never executes in the viewer origin.
                 inline=f.suffix.lower() in ('.png','.jpg','.jpeg','.gif','.webp','.avif','.bmp')
-                self.send(f.read_bytes(),ctype=ctype if inline else 'application/octet-stream',headers={} if inline else {'Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(f.name)});return
+                self.stream_file(f,inline);return
             file=APP/'web'/('index.html' if url.path=='/' else url.path.lstrip('/'))
             if not file.resolve().is_relative_to((APP/'web').resolve()) or not file.is_file():self.send({'error':'Not found'},404);return
             self.send(file.read_bytes(),ctype=static_mime(file),headers={'Cache-Control':'private, max-age=86400'} if file.resolve().is_relative_to((APP/'web'/'vendor').resolve()) else None)

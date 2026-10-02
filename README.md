@@ -1,11 +1,11 @@
-# Offline Chat Viewer · v1.1.4
+# Offline Chat Viewer · v1.1.5
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.4-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.4/Offline-Chat-Viewer-v1.1.4-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.4/Offline-Chat-Viewer-v1.1.4-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.5-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.5/Offline-Chat-Viewer-v1.1.5-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.5/Offline-Chat-Viewer-v1.1.5-Windows.zip.sha256.txt)
 
 ## Start on Windows / Edge
 
@@ -22,6 +22,17 @@ If Edge is not your default browser, copy the launch URL printed in the console 
 Closing the console stops the server. Settings → Stop viewer also stops it. Double-click the launcher to reopen. The bundled runtime is Windows x64; macOS/Linux can use Python 3.10+ with `python3 viewer.py` or START-VIEWER.command. Windows ARM64 can use its x64 emulation or a full Python installation.
 
 When updating, close the old viewer console, replace the app files, **keep `.viewer-data`**, and reopen START-VIEWER.bat. Your existing index and organization remain available. Type corrections update automatically without rebuilding message contents. If loading still stalls, run **CHECK-VIEWER.bat** while the viewer is open and attach **VIEWER-DIAGNOSTICS.json**. The report includes response lengths, received bytes, and transfer timings, with no conversation text, titles, folder paths, or session tokens.
+
+## Exporter integration and rendering · v1.1.5
+
+- Folder checks recognize the exporter root, count saved/pending conversations, and offer the correct parent when you select `json` or `markdown`.
+- ZIP imports merge `conversation-index.json` and portable-state metadata, including older camelCase fields. JSON wins over duplicate Markdown; projects, dates, Work/Codex signals and exported pins are preserved. Newer existing chats and manual organization remain authoritative.
+- The chat's Files button opens searchable attachments with text/image previews, copyable original paths, downloads and explicit unavailable/incomplete status. Its Library control retains manual downloaded-copy imports from v1.1.4. Downloads stream instead of loading entire files into memory.
+- Long source chats build page indexes once. Markdown rendering has a bounded cache and keeps its worker warm across navigation; state/source caches are bounded. Organization restore saves one batch.
+- Charts include the full numeric range, preserve sampled extremes and gaps, space numeric x-values correctly, and avoid thousands of point elements for large lines. Hover work runs once per animation frame and reuses same-point content. Saved data tables populate on demand.
+- Attachment and HTML directories no longer become accidental chat sources. Exported originals, private settings, credentials and account-specific classification rules remain outside the public package.
+
+Validated with 176 backend tests, JavaScript syntax and parser/geometry checks, and isolated Edge checks of exporter-root selection, files, Library navigation, chart inspection, readable text and lazy tables. Local archive detection used the real exporter index. Live ChatGPT Library downloads and unattended cloud backup runs were not exercised in this update.
 
 ## Files & Library · v1.1.4
 

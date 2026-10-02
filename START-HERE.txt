@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.1.4
+OFFLINE CHAT VIEWER v1.1.5
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
@@ -89,3 +89,7 @@ Preferences automatically follow new installs for the same Windows user. Keep .v
 
 VERSION 1.1.4: FILES & LIBRARY
 Open Files & Library to search saved attachments and Library files, download local copies, and open source chats. Use ChatGPT Exporter 2.4.1 for manual download paths. Download files of 10 MB or more in ChatGPT, then import the downloaded copy into your backup. File availability refreshes without rebuilding chats. Keep .viewer-data when updating.
+
+
+VERSION 1.1.5
+Export folders can inspect the exporter index and suggest its root. Import export ZIPs from Backups & Drive. The chat Files button offers local previews and a link to manual Library imports. Original names/paths are retained. Long-chat paging and chart drawing now do less repeated work. Keep .viewer-data during upgrades.

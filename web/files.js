@@ -22,7 +22,7 @@ window.ArchiveFiles=(()=>{
   get('files-notes').textContent=result.notes.join('\n');
  }
  function open(id=''){conversation=id;get('files-chat-only').checked=!!id;get('files-dialog').showModal();void run(()=>load())();}
- function init(){get('files-open').onclick=()=>open();get('chat-files-open').onclick=()=>open(S.selected?.id || '');let timer;get('files-search').oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>void run(()=>load())(),180);};get('files-status').onchange=run(()=>load());get('files-chat-only').onchange=run(()=>{conversation=get('files-chat-only').checked?S.selected?.id || '':'';return load();});get('files-refresh').onclick=run(()=>load());get('files-more').onclick=run(()=>load(false));}
+ function init(){get('files-open').onclick=()=>open();get('chat-files-open').onclick=()=>window.ExportInterop?ExportInterop.openFiles():open(S.selected?.id || '');let timer;get('files-search').oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>void run(()=>load())(),180);};get('files-status').onchange=run(()=>load());get('files-chat-only').onchange=run(()=>{conversation=get('files-chat-only').checked?S.selected?.id || '':'';return load();});get('files-refresh').onclick=run(()=>load());get('files-more').onclick=run(()=>load(false));}
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
  return {open,refresh:()=>load()};
 })();

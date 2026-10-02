@@ -2,13 +2,14 @@
 // Rich formatting is scheduled only for messages approaching the viewport.
 window.Reader=(()=>{
  const node=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n;};
- const states=new Map(),sourceCache=new Map();let worker=null,ready=false,active=null,jobs=[],serial=0;
+ class BoundedMap extends Map{constructor(limit){super();this.limit=limit;}set(key,value){super.delete(key);super.set(key,value);while(this.size>this.limit)this.delete(this.keys().next().value);return this;}}
+ const states=new BoundedMap(512),sourceCache=new BoundedMap(128);let worker=null,ready=false,active=null,jobs=[],serial=0;
  let startupTimer=null;
  let colourWorker=null,colourReady=false,colourActive=null,colourJobs=[],colourTimer=null;
  function stopColour(){clearTimeout(colourTimer);if(colourActive){colourActive.resolve(null);colourActive=null;}for(const job of colourJobs.splice(0))job.resolve(null);colourWorker?.terminate();colourWorker=null;colourReady=false;}
  function runColour(){
   if(!colourJobs.length||colourActive)return;
-  if(!colourWorker){colourWorker=new Worker('highlight-worker.js?v=1.1.3');colourTimer=setTimeout(stopColour,5000);colourWorker.onerror=stopColour;colourWorker.onmessage=e=>{if(e.data.ready){clearTimeout(colourTimer);colourReady=true;runColour();return;}if(e.data.error&&!e.data.id){stopColour();return;}if(colourActive&&e.data.id===colourActive.id){clearTimeout(colourTimer);const job=colourActive;colourActive=null;job.resolve(e.data.html||null);runColour();}};}
+  if(!colourWorker){colourWorker=new Worker('highlight-worker.js?v=1.1.4');colourTimer=setTimeout(stopColour,5000);colourWorker.onerror=stopColour;colourWorker.onmessage=e=>{if(e.data.ready){clearTimeout(colourTimer);colourReady=true;runColour();return;}if(e.data.error&&!e.data.id){stopColour();return;}if(colourActive&&e.data.id===colourActive.id){clearTimeout(colourTimer);const job=colourActive;colourActive=null;job.resolve(e.data.html||null);runColour();}};}
   if(!colourReady)return;
   while(colourJobs.length&&!colourJobs[0].root.isConnected)colourJobs.shift().resolve(null);
   if(!colourJobs.length)return;colourActive=colourJobs.shift();colourTimer=setTimeout(stopColour,1200);colourWorker.postMessage({id:colourActive.id,text:colourActive.text,language:colourActive.language});
@@ -18,13 +19,13 @@ window.Reader=(()=>{
  function cancel(){
   // Keep a booting/idle renderer warm when selection changes. Colouring never
   // owns the format queue while downloading its optional dependency.
-  if(active)failWorker('A different conversation was opened.');
-  else for(const job of jobs.splice(0))job.reject(Error('A different conversation was opened.'));
+  if(active){active.reject(Error('A different conversation was opened.'));active.cancelled=true;}
+  for(const job of jobs.splice(0))job.reject(Error('A different conversation was opened.'));
   stopColour();
  }
- function preload(){if(worker)return;worker=new Worker('render-worker.js?v=1.1.3');startupTimer=setTimeout(()=>failWorker('Formatting renderer startup timed out.'),15000);
+ function preload(){if(worker)return;worker=new Worker('render-worker.js?v=1.1.4');startupTimer=setTimeout(()=>failWorker('Formatting renderer startup timed out.'),15000);
   worker.onmessage=e=>{if(e.data.ready){clearTimeout(startupTimer);ready=true;run();return;}if(e.data.startupError){failWorker(e.data.startupError);return;}
-   if(active&&e.data.id===active.id){const job=active;clearTimeout(job.timer);active=null;e.data.error?job.reject(Error(e.data.error)):job.resolve(e.data.html);run();}};
+   if(active&&e.data.id===active.id){const job=active;clearTimeout(job.timer);active=null;if(!job.cancelled)e.data.error?job.reject(Error(e.data.error)):job.resolve(e.data.html);run();}};
   worker.onerror=()=>failWorker('Formatting worker could not load.');
  }
  function run(){if(!jobs.length||active)return;preload();if(!ready)return;while(jobs.length&&!jobs[0].root.isConnected)jobs.shift().reject(Error('Message is no longer visible.'));if(!jobs.length)return;active=jobs.shift();active.timer=setTimeout(()=>failWorker('This message needs more time to format.'),6000);worker.postMessage({id:active.id,text:active.text,mode:active.mode,language:active.language});}
@@ -83,7 +84,7 @@ window.Reader=(()=>{
   }
   summary.append(copy);pre.replaceWith(details);editor.append(pre);details.append(summary,editor);foldState(details,codeKey,readable);
  }}
- function tables(root,key){let index=0;for(const table of [...root.querySelectorAll('table')]){const cols=Math.max(...[...table.rows].map(r=>[...r.cells].reduce((n,c)=>n+(c.colSpan||1),0))),rows=table.tBodies[0]?.rows.length||Math.max(0,table.rows.length-1),card=node('section','table-card'),bar=node('div','table-toolbar'),viewport=node('div','table-wrap'),toggle=node('button','table-toggle','▾'),copy=node('button','','Copy'),expand=node('button','','Expand ↗'),tableKey=key+'|table:'+index++;
+ function tables(root,key){let index=0;for(const table of [...root.querySelectorAll('table')]){if(table.closest('.chart-data'))continue;const cols=Math.max(...[...table.rows].map(r=>[...r.cells].reduce((n,c)=>n+(c.colSpan||1),0))),rows=table.tBodies[0]?.rows.length||Math.max(0,table.rows.length-1),card=node('section','table-card'),bar=node('div','table-toolbar'),viewport=node('div','table-wrap'),toggle=node('button','table-toggle','▾'),copy=node('button','','Copy'),expand=node('button','','Expand ↗'),tableKey=key+'|table:'+index++;
     viewport.tabIndex=0;viewport.setAttribute('role','region');viewport.setAttribute('aria-label','Scrollable table');table.style.setProperty('--table-min-width',(cols>=3?104+(cols-1)*224:Math.max(480,cols*240))+'px');table.dataset.columns=cols;
     const fit=node('button','table-fit','Wide'),compact=node('button','table-compact','Compact');
     const isIndex=/^(#|no\.?|index|id)$/i.test(table.rows[0]?.cells[0]?.textContent.trim()||'');if(isIndex)table.dataset.index='1';

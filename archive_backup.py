@@ -8,6 +8,7 @@ from export_bundle import documents as discover_documents,asset_paths,counts,con
 from atomic_files import atomic_bytes
 from folder_tools import drive_suggestion,open_folder
 from backup_policy import interval_seconds,power_allowed,retire_extras
+from exporter_bridge import metadata_sources,timestamp
 
 SKIP={'.viewer-data','.git','__pycache__','node_modules','runtime','models','.semantic-env'}
 TEXT={'.md','.json','.jsonl'}
@@ -347,18 +348,36 @@ class BackupManager:
                         metadata=json.loads((root/'backup-manifest.json').read_text(encoding='utf-8'))
                         if metadata.get('schema')=='offline-chat-viewer/backup-v1':
                             for c in metadata.get('conversations',[]):mappings.setdefault(c.get('path'),[]).append(c)
-                    catalog={c['id']:c for c in self.archive.catalog()};indexed=skipped=0;documents=[p for p in discover_documents(root,root,self.cancel,self.app) if p.name not in ('backup-manifest.json','viewer-settings.json','conversation-index.json','archive-index.json') and 'portable-state' not in p.name]
+                    catalog={c['id']:c for c in self.archive.catalog()};indexed=skipped=0
+                    discovered=discover_documents(root,root,self.cancel,self.app)
+                    exporter_meta,by_path,manifests=metadata_sources(root,discovered)
+                    for entry,manifest in manifests:
+                        self.check();self.archive.register_manifest(entry,manifest,root)
+                    documents=[p for p in discovered if p.name.lower() not in ('backup-manifest.json','viewer-settings.json','conversation-index.json','archive-index.json','export-report.json') and 'portable-state' not in p.name.lower()]
+                    # JSON preserves branches, citations and attachments. Read each
+                    # indexed conversation once when its Markdown twin also exists.
+                    json_ids={by_path[str(p)][0]['id'] for p in documents if p.suffix.lower()=='.json' and str(p) in by_path}
+                    documents=[p for p in documents if not (p.suffix.lower()=='.md' and str(p) in by_path and by_path[str(p)][0]['id'] in json_ids)]
+                    documents.sort(key=lambda p:(p.suffix.lower()=='.md',str(p)))
                     for index,p in enumerate(documents):
                         self.check();self.update(phase='Integrating conversations',done=index+1,total=len(documents),current=p.name)
                         for item in self.archive.read_items(p):
+                            source_meta=by_path.get(str(p),(exporter_meta.get(item['id'],{}),None))[0]
+                            if source_meta:
+                                item['id']=source_meta['id']
+                                for key,target in (('create_time','created'),('update_time','updated')):
+                                    if source_meta.get(key):item[target]=max(item.get(target) or 0,timestamp(source_meta[key])) if target=='updated' and p.suffix.lower()!='.md' else timestamp(source_meta[key])
                             relative=p.relative_to(root/'archive').as_posix() if p.is_relative_to(root/'archive') else ''
                             saved=mappings.get(relative,[])
                             meta=next((c for c in saved if c.get('id')==item['id']),saved[0] if p.suffix.lower()=='.md' and len(saved)==1 else None)
                             if meta:
                                 item.update({k:meta[k] for k in ('id','title','url','created','updated','kind','project') if meta.get(k) is not None})
                             old=catalog.get(item['id']);new_count=len(item['messages'])
-                            if old and (old.get('updated',0)>(item.get('updated') or 0) or old.get('updated',0)==(item.get('updated') or 0) and old.get('count',0)>=new_count):skipped+=1;continue
-                            s=p.stat();self.archive.store(item,p,str(s.st_mtime_ns)+':'+str(s.st_size),root,{});catalog[item['id']]=dict(item,count=new_count);indexed+=1
+                            upgrade=old and Path(old.get('path','')).suffix.lower()=='.md' and p.suffix.lower()=='.json'
+                            if old and (old.get('updated',0)>(item.get('updated') or 0) or old.get('updated',0)==(item.get('updated') or 0) and old.get('count',0)>=new_count and not upgrade):
+                                if old.get('updated',0)==(item.get('updated') or 0):self.archive.enrich(item['id'],source_meta)
+                                skipped+=1;continue
+                            s=p.stat();self.archive.store(item,p,str(s.st_mtime_ns)+':'+str(s.st_size),root,source_meta);catalog[item['id']]=dict(item,count=new_count,path=str(p));indexed+=1
                     if restore_settings and (root/'viewer-settings.json').exists():
                         values=json.loads((root/'viewer-settings.json').read_text(encoding='utf-8'))
                         if values.get('schema')!='offline-chat-viewer/v1':raise ValueError('The archive contains an unrecognized settings backup.')

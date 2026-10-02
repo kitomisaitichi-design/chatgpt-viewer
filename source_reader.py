@@ -3,6 +3,15 @@ import json, threading
 from collections import OrderedDict
 from concurrent.futures import Future
 from pathlib import Path
+from bisect import bisect_left,bisect_right
+
+class IndexedRows(list):
+    """Build branch indexes once; successive reader pages only copy their window."""
+    def __init__(self,rows):
+        super().__init__(rows)
+        self.visible=[m for m in self if m['visible']]
+        self.sequences=[m['seq'] for m in self]
+        self.visible_sequences=[m['seq'] for m in self.visible]
 
 def native_conversation(text,path):
     records=[json.loads(line) for line in text.splitlines() if line.strip()]
@@ -58,7 +67,7 @@ class SourceReader:
             if leaf and (not isinstance(raw,dict) or leaf not in (raw.get('mapping') or {})):raise ValueError('Saved JSON branch was not found.')
             parsed=self.parse_md(e['md'],e['path']) if raw is None else self.parse_json(raw,e['path'],leaf)
             if not parsed:raise ValueError('This export does not contain readable chat messages.')
-            rows=[dict(m,seq=i,cid=cid) for i,m in enumerate(parsed['messages'])]
+            rows=IndexedRows(dict(m,seq=i,cid=cid) for i,m in enumerate(parsed['messages']))
             e['rows'][leaf]=rows
             while len(e['rows'])>2:e['rows'].popitem(last=False)
             return rows
@@ -67,9 +76,10 @@ class SourceReader:
         with self.lock:self.entries.clear()
 
 def page_rows(allrows,before=None,around=None,limit=100,details=False,after=None):
-    allrows=[m for m in allrows if details or m['visible']];limit=max(1,min(int(limit),200))
-    if around is not None:rows=[m for m in allrows if m['seq']>=max(0,int(around)-8)][:limit]
-    elif after is not None:rows=[m for m in allrows if m['seq']>int(after)][:limit]
-    else:rows=[m for m in allrows if before is None or m['seq']<int(before)][-limit:]
-    first=rows[0]['seq'] if rows else 0;last=rows[-1]['seq'] if rows else -1
-    return dict(messages=rows,total=len(allrows),older=sum(m['seq']<first for m in allrows),newer=sum(m['seq']>last for m in allrows),first=first)
+    indexed=allrows if isinstance(allrows,IndexedRows) else IndexedRows(allrows)
+    values=indexed if details else indexed.visible;seqs=indexed.sequences if details else indexed.visible_sequences;limit=max(1,min(int(limit),200))
+    if around is not None:start=bisect_left(seqs,max(0,int(around)-8));end=min(len(values),start+limit)
+    elif after is not None:start=bisect_right(seqs,int(after));end=min(len(values),start+limit)
+    else:end=len(values) if before is None else bisect_left(seqs,int(before));start=max(0,end-limit)
+    rows=values[start:end];first=rows[0]['seq'] if rows else 0
+    return dict(messages=rows,total=len(values),older=start if rows else 0,newer=len(values)-end if rows else len(values),first=first)
