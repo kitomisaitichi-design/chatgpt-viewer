@@ -31,6 +31,8 @@ The exporter automatically downloads Library files strictly below **10,000,000 b
 
 Files remain bounded to the selected backup root. HTML, SVG and executable content download as attachments. Large downloads stream in 128 KiB chunks. Updating preserves `.viewer-data`, shared preferences and backup/Drive configuration.
 
+Backup ZIP compression also supports Python 3.10–3.12, retaining the same level and archive layout as the bundled Python 3.13. Scheduled backups while the viewer is closed require Windows.
+
 Validation: **162 backend tests** and an isolated exporter-to-viewer Edge integration test, including manual import of a **10,000,000-byte** file, a byte-identical local download, Stop/resume and source-chat navigation. Website responses were simulated; live ChatGPT Library compatibility remains unverified.
 
 ## Improvements in v1.1.3

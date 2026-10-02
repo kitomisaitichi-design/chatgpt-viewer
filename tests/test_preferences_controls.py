@@ -1,4 +1,4 @@
-import json, shutil, tempfile, threading, unittest, zipfile
+import json, os, shutil, tempfile, threading, unittest, zipfile
 from pathlib import Path
 from unittest.mock import patch
 from viewer import Archive
@@ -65,6 +65,7 @@ class PreferenceControls(unittest.TestCase):
         with zipfile.ZipFile(full,'w') as z:z.writestr('backup-manifest.json',json.dumps({'schema':'offline-chat-viewer/backup-v1'}))
         copy=folder/'Chat-Archive-Full (copy).zip';shutil.copy2(full,copy)
         result=retire_extras(folder,['full']);self.assertEqual(result,['deduplicated:'+str(copy)]);self.assertFalse(copy.exists());self.assertTrue(full.exists())
+    @unittest.skipUnless(os.name=='nt','Windows Task Scheduler XML')
     def test_schedule_xml_obeys_interval_idle_power_and_profile_path(self):
         self.a.save_settings({'scan_start':str(self.base)});attach(self.a,self.base/'profile.json');manager=BackupManager(self.a,Path(__file__).parents[1])
         try:

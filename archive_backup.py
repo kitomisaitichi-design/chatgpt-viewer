@@ -101,7 +101,10 @@ def build_zip(root,destination,files,manifest,settings=None,progress=lambda **kw
         for relative,expected in sorted(files.items()):
             check();p=root/relative;before=p.stat()
             if before.st_size!=expected['size'] or before.st_mtime_ns!=expected['mtime_ns']:raise ValueError(relative+' changed before packaging. Retry when the export is stable.')
-            info=zipfile.ZipInfo('archive/'+relative,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.compress_level=3;info.external_attr=0o100600<<16;sha=hashlib.sha256()
+            info=zipfile.ZipInfo('archive/'+relative,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED
+            if hasattr(info,'compress_level'):info.compress_level=3
+            else:info._compresslevel=3  # Python 3.10–3.12 expose only the underlying slot.
+            info.external_attr=0o100600<<16;sha=hashlib.sha256()
             with p.open('rb') as source,z.open(info,'w',force_zip64=True) as target:
                 while part:=source.read(1024*1024):
                     check();target.write(part);sha.update(part);done+=len(part);progress(phase='Packaging '+manifest['mode']+' backup',done=done,total=total,current=p.name)

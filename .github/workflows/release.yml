@@ -23,7 +23,9 @@ jobs:
           git fetch --depth=1 origin "$COMMIT"
           git checkout --detach FETCH_HEAD
       - name: Run backend tests
-        run: python3 -m unittest discover -s tests -q
+        run: |
+          python3 --version
+          python3 -u -m unittest discover -s tests -q
       - name: Build and publish ZIP and checksum
         env:
           GH_TOKEN: ${{ github.token }}
