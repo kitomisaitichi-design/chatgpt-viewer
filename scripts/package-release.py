@@ -13,7 +13,7 @@ for required in ['viewer.py','library_files.py','START-VIEWER.bat','runtime/pyth
 with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
  for relative in paths:
   if any(p.startswith('.') for p in Path(relative).parts) or '__pycache__' in relative or relative.endswith('.pyc'):raise ValueError('Unexpected private/generated file: '+relative)
-  info=zipfile.ZipInfo('offline-chat-viewer/'+relative,(2000,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o644<<16;z.writestr(info,(root/relative).read_bytes())
+  info=zipfile.ZipInfo('offline-chat-viewer/'+relative,(2000,1,1,0,0,0));info.create_system=3;info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o644<<16;z.writestr(info,(root/relative).read_bytes())
 with zipfile.ZipFile(target) as z:
  if z.testzip():raise ValueError('CRC validation failed')
 sha=hashlib.sha256(target.read_bytes()).hexdigest();(out/(name+'.sha256.txt')).write_text(sha+'  '+name+'\n',encoding='ascii')

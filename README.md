@@ -1,11 +1,11 @@
-# Offline Chat Viewer · v1.1.5
+# Offline Chat Viewer · v1.1.6
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.5-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.5/Offline-Chat-Viewer-v1.1.5-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.5/Offline-Chat-Viewer-v1.1.5-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.6-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.6/Offline-Chat-Viewer-v1.1.6-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.6/Offline-Chat-Viewer-v1.1.6-Windows.zip.sha256.txt)
 
 ## Start on Windows / Edge
 
@@ -22,6 +22,14 @@ If Edge is not your default browser, copy the launch URL printed in the console 
 Closing the console stops the server. Settings → Stop viewer also stops it. Double-click the launcher to reopen. The bundled runtime is Windows x64; macOS/Linux can use Python 3.10+ with `python3 viewer.py` or START-VIEWER.command. Windows ARM64 can use its x64 emulation or a full Python installation.
 
 When updating, close the old viewer console, replace the app files, **keep `.viewer-data`**, and reopen START-VIEWER.bat. Your existing index and organization remain available. Type corrections update automatically without rebuilding message contents. If loading still stalls, run **CHECK-VIEWER.bat** while the viewer is open and attach **VIEWER-DIAGNOSTICS.json**. The report includes response lengths, received bytes, and transfer timings, with no conversation text, titles, folder paths, or session tokens.
+
+## Catalog controls · v1.1.6
+
+- Quick sidebar search matches display/original titles, projects and categories. Full archive search still searches message contents and opens the matching turn.
+- Combine read/unread, project membership, pins, untitled titles and inclusive created/updated date ranges with your current type and folder ordering. Clear filters without resetting the order.
+- Date labels, created/updated/message metadata, quick rename, Open in ChatGPT, and keyboard shortcuts (`/`, `J/K`, `R`, `P`, `?`). Typing and dialogs take priority over shortcuts.
+- Reading state follows your shared preferences across versions; a newer exported update becomes unread. Bulk “Mark matches read” applies to the current type/filter matches, including collapsed folders.
+- Independently implemented controls inspired by [ChatGPT Triage](https://github.com/NASIRCISSISTIC/chatgpt-triage). No remote mutation queue or delete workflow is included.
 
 ## Exporter integration and rendering · v1.1.5
 
@@ -100,7 +108,7 @@ Validation: **162 backend tests** and an isolated exporter-to-viewer Edge integr
 - Add, rename, or remove **categories**. Removing a category preserves its chats.
 - Drag a chat onto a category heading to move it. Drag it onto another chat to place it before that chat; only the destination group switches to manual order. Manual order is stored within each displayed group. Dragging across a category sets the destination category.
 - Pin chats; customize their display titles; manually correct Chat/Work/Codex classification, or return a chat to Automatic classification. Editing a title or category leaves automatic classification enabled.
-- Sort by newest, oldest, recent update, A–Z, or manual order. Newest/oldest use original creation time when available, otherwise source timestamps.
+- Sort by newest, oldest, recent update, A–Z, Z–A, least recent update, or manual order. Newest/oldest use original creation time when available, otherwise source timestamps.
 - Group by categories, disk folders, or chat type; show a flat list; collapse groups; hide all project chats using the Projects checkbox.
 - Dark, pure black, light, or custom background/sidebar/text/accent colors. Adjust text size, reading width, and page size.
 - Optional remembered reading positions and timestamps. Recurring export rescans are off by default. In Settings, enable them and use the stepped interval slider: 5, 15 or 30 minutes; 1, 3, 6, 12 or 24 hours; or 3 days. The default interval is one hour and the viewer must be open. You can also use Resume / rescan when you save new exports.

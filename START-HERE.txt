@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.1.5
+OFFLINE CHAT VIEWER v1.1.6
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
@@ -93,3 +93,6 @@ Open Files & Library to search saved attachments and Library files, download loc
 
 VERSION 1.1.5
 Export folders can inspect the exporter index and suggest its root. Import export ZIPs from Backups & Drive. The chat Files button offers local previews and a link to manual Library imports. Original names/paths are retained. Long-chat paging and chart drawing now do less repeated work. Keep .viewer-data during upgrades.
+
+VERSION 1.1.6
+Find titles/folders in the sidebar; Filters combines read status, projects, pins, untitled and created/updated ranges with current type and ordering. Use /, J/K, R, P, or ? for shortcuts. Full message search is still Ctrl+K. Keep .viewer-data during upgrades.
