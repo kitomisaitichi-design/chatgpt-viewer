@@ -58,3 +58,11 @@ Copy folder paths with the adjacent copy icon. **Open local ZIP folder** opens E
 
 VERSION 1.1.3
 Preferences automatically follow new installs for the same Windows user. Keep .viewer-data when updating to preserve the index. Conversation menus include colours and reversible Trash. Backups support every 1-168 hours, optional idle/AC-power conditions and local-only delivery. Extra distinct viewer ZIPs move to .retired-viewer-backups; exact duplicate copies can be removed. Automatic backups remain off until you enable and save them.
+
+## Selective contents and existing ZIP migration · v1.1.7
+
+In **Include in each ZIP**, choose Markdown, JSON/sessions, images and other files. All four start selected for upgrades. Metadata stays included. **Review files to include** shows selected counts without hashing large files. Source/Drive candidate menus populate on Quick scan, including My Drive inside mirrored GoogleDrive folders; existing custom paths remain unchanged until you select another candidate.
+
+Completed ZIPs include original folder paths, typed `indexes/`, conversation cross-links, SHA-256 file hashes, `save-state.json` and `save-state.csv`. Extract everything before opening `OPEN-ARCHIVE.html`. Original exporter indexes can refer to files you intentionally excluded. Keep all four choices selected for a complete recovery archive.
+
+**Copy existing ZIPs to Drive** hashes completed ZIPs against their saved records before copying the requested full/progress slots. It skips source discovery and ZIP rebuilding, works with an offline export source, and refuses changed/unrecognized ZIPs before replacing a destination. The selected local folder must contain the tracked ZIPs; create local ZIPs first if it does not. This action copies the already-created contents rather than applying new content choices. Use **Copy ZIPs to Drive folder** to build/deliver using current choices. Google Drive for desktop reports final cloud upload status.

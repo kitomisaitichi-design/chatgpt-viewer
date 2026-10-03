@@ -44,7 +44,7 @@ class HTTPChecks(unittest.TestCase):
                     self.end_headers()
                     return
                 if self.path == '/api/state' and owner.mode == 'stall':
-                    time.sleep(.25)
+                    time.sleep(1)
                 data = {'ok': True, 'version': '1.0.3', 'pid': 123} if self.path == '/api/health' else {
                     'chats': [{'title': 'PRIVATE_CHAT', 'text': 'PRIVATE_MESSAGE'}], 'revision': 7,
                     'settings': {'scan_start': 'PRIVATE_PATH'}, 'coverage': {'available': 1},
@@ -55,7 +55,7 @@ class HTTPChecks(unittest.TestCase):
                 self.end_headers()
                 try:
                     self.wfile.write(body)
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     pass
 
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -85,7 +85,7 @@ class HTTPChecks(unittest.TestCase):
 
     def test_stalled_state_distinguished_from_dead_server(self):
         self.mode = 'stall'
-        report = diagnose(self.app, timeout=.05)
+        report = diagnose(self.app, timeout=.5)
         self.assertEqual(report['finding'], 'server_alive_but_status_request_stalls')
         self.assertEqual(report['requests'][-1]['outcome'], 'ok')
 

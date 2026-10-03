@@ -42,7 +42,7 @@ def iter_documents(start,root,event,status,app,exclude=()):
                 dirs.clear();note('Depth limit reached at '+str(basepath))
             def priority(name):
                 lower=name.lower()
-                return (0 if lower=='conversation-index.json' or 'portable-state' in lower else 1 if lower.endswith('.json') else 2,lower)
+                return (0 if lower in ('conversation-index.json','viewer-handoff.json') or 'portable-state' in lower else 1 if lower.endswith('.json') else 2,lower)
             for name in sorted(files,key=priority):
                 if event.is_set():return
                 f=basepath/name

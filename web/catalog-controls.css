@@ -4,3 +4,22 @@
 .catalog-dates .chat-row>button:first-child{display:flex;align-items:center;gap:8px}.catalog-dates .catalog-row-meta{flex:0 0 82px;margin:0;font-size:9px;text-overflow:ellipsis;overflow:hidden}.catalog-row-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 #sidebar{width:340px;min-width:280px}.catalog-dates .catalog-row-meta{flex-basis:88px;font-size:10px}@media(max-width:850px){#sidebar{width:280px;min-width:280px}}
+
+/* Stable adjustable edge; only its width changes while dragging. */
+#sidebar{position:relative;width:var(--sidebar-width,340px);min-width:260px;max-width:560px;flex-shrink:0;resize:none;padding:12px 14px 0;overflow:hidden;box-shadow:inset -1px 0 0 var(--border)}
+#sidebar-resize{position:absolute;right:0;top:0;bottom:0;width:7px;z-index:12;cursor:col-resize;touch-action:none;background:transparent;outline-offset:-2px}
+#sidebar-resize::after{content:'';position:absolute;right:1px;top:44%;height:48px;width:3px;border-radius:4px;background:var(--muted);opacity:.25;transition:opacity .15s,background .15s}
+#sidebar-resize:hover::after,#sidebar-resize:focus-visible::after,.sidebar-resizing #sidebar-resize::after{opacity:1;background:var(--accent)}
+.sidebar-resizing,.sidebar-resizing *{cursor:col-resize!important;user-select:none!important}
+.sidebar-navigation{display:grid;gap:3px;padding:5px;border:1px solid var(--border);border-radius:15px;background:color-mix(in srgb,var(--panel) 18%,var(--side))}
+#sidebar .brand{margin:0 0 14px}#sidebar .nav-action{padding:9px 10px;min-height:39px;border-radius:10px;font-size:13px;gap:11px}#sidebar .nav-action>span{width:23px;text-align:center;font-size:20px}
+#sidebar .sidebar-section-label{margin:16px 3px 7px;padding:0;font-size:10px;letter-spacing:.09em;color:var(--muted)}
+#sidebar .type-tabs{margin:0 0 13px;padding:4px;gap:3px;border:1px solid var(--border);border-radius:12px;background:color-mix(in srgb,var(--panel) 14%,var(--side))}
+#sidebar .type-tabs button{min-height:34px;padding:6px 3px;font-size:11px;border-radius:8px}#sidebar .type-tabs .active{box-shadow:inset 0 0 0 1px var(--border)}
+#sidebar .organization-label{margin-top:0;padding-top:12px;border-top:1px solid var(--border)}#sidebar .side-tools{gap:7px}#sidebar .side-tools select{border:1px solid var(--border);border-radius:10px;padding:9px 10px;color:var(--text);background:var(--side)}
+#sidebar .side-toggle{padding:9px 3px}#sidebar .catalog-search{margin:0 0 7px;border-radius:11px}#sidebar .catalog-status{padding:0 3px 8px;border-bottom:1px solid var(--border)}
+#sidebar .chat-list{padding:7px 0 10px;min-height:80px;scroll-padding-top:8px}#sidebar .group-heading{padding:12px 7px 7px}#sidebar .chat-row{margin:2px 0;height:38px;border-radius:10px}#sidebar .chat-row button{height:38px;padding:8px 9px;font-size:12px}#sidebar .chat-row.selected{box-shadow:inset 0 0 0 1px var(--border)}
+#sidebar .catalog-footer{padding:7px 0;border-top:1px solid var(--border)}#sidebar .trash-nav{margin-bottom:7px}#sidebar .sidebar-bottom{padding:9px 0 10px}#sidebar .profile{margin:10px 6px 0;padding-top:10px;border-top:1px solid var(--border)}
+.sidebar-narrow.catalog-dates .catalog-row-meta,.catalog-dates .sidebar-narrow .catalog-row-meta{flex-basis:68px;font-size:9px}
+@media(max-width:850px){#sidebar{width:var(--sidebar-width,280px);min-width:260px}}@media(max-width:700px){#sidebar{width:280px;min-width:280px;max-width:280px}#sidebar-resize{display:none}}
+@media(max-width:600px){#sidebar{position:absolute}}

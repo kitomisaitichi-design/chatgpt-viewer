@@ -16,8 +16,8 @@ def drive_suggestion(roots=None,refresh=False):
     found=[]
     for root in roots:
         root=Path(root)
-        candidate=root if root.name in ('My Drive','Google Drive','GoogleDrive') else root/'My Drive'
         try:
+            candidate=root/'My Drive' if (root/'My Drive').is_dir() else root if root.name in ('My Drive','Google Drive','GoogleDrive') else root/'My Drive'
             if candidate.is_dir() and candidate not in found:found.append(candidate)
         except OSError:continue
     result={'available':bool(found),'root':str(found[0]) if found else '', 'roots':[str(p) for p in found],
@@ -43,7 +43,7 @@ def quick_setup(settings,app,refresh=False,downloads=None):
         for candidate in [base]+children:
             try:
                 if not candidate.is_dir() or candidate.is_symlink():continue
-                if (candidate/'conversation-index.json').is_file() or ((candidate/'markdown').is_dir() and (candidate/'json').is_dir()):
+                if any((candidate/name).is_file() for name in ('conversation-index.json','viewer-handoff.json','portable-state.json')) or ((candidate/'markdown').is_dir() and (candidate/'json').is_dir()):
                     if candidate not in candidates:candidates.append(candidate)
             except OSError:continue
     source=str(candidates[0]) if candidates else ''

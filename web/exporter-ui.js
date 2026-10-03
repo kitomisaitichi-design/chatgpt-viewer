@@ -5,7 +5,7 @@ window.ExportInterop=(()=>{
  async function inspect(){
   const path=$('folder-path').value.trim(),id=++checkId,box=$('export-inspection');inspection=null;box.hidden=!path;if(!path)return;
   $('export-inspection-title').textContent='Checking export folder…';$('export-inspection-detail').textContent='';$('use-export-root').hidden=true;
-  try{const data=await api('/api/export-inspect?'+new URLSearchParams({path}));if(id!==checkId)return;inspection=data;$('export-inspection-title').textContent=data.format;
+  try{const data=await api('/api/export-inspect?'+new URLSearchParams({path}));if(id!==checkId)return;inspection=data;$('export-inspection-title').textContent=data.format+(data.exporter_version?' · '+data.exporter_version:'');
    $('export-inspection-detail').textContent=data.has_index?[data.available+' saved conversations of '+data.expected,data.missing?data.missing+' still missing':'',data.pending_attachments?data.pending_attachments+' awaiting attachments':'',...data.warnings].filter(Boolean).join(' · '):[data.has_json?'JSON detected':'',data.has_markdown?'Markdown detected':'','Choose Scan & index to load messages and saved files.'].filter(Boolean).join(' · ');
    $('use-export-root').hidden=data.root===path;$('use-export-root').title=data.root;
   }catch(error){if(id===checkId){$('export-inspection-title').textContent='Folder needs attention';$('export-inspection-detail').textContent=error.message;}}

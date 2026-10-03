@@ -51,7 +51,7 @@ def timestamp(value):
 
 def metadata_sources(root,documents):
     by_id={};by_path={};manifests=[]
-    indexes=sorted((p for p in documents if p.name.lower()=='conversation-index.json' or 'portable-state' in p.name.lower()),key=lambda p:(p.name.lower()=='conversation-index.json',str(p)))
+    indexes=sorted((p for p in documents if p.name.lower() in ('viewer-handoff.json','conversation-index.json') or 'portable-state' in p.name.lower()),key=lambda p:(p.name.lower()=='conversation-index.json',p.name.lower()!='viewer-handoff.json',str(p)))
     for manifest in indexes:
         for entry in read_index(manifest):
             entry={**by_id.get(entry['id'],{}),**entry};by_id[entry['id']]=entry
@@ -86,16 +86,19 @@ def inspect_folder(path):
     selected=Path(path).expanduser().resolve()
     if not selected.is_dir():raise ValueError('Choose an existing exporter folder.')
     parent=selected.parent
-    root=parent if selected.name.lower() in ('json','markdown','html','attachments','files') and (any((parent/n).is_file() for n in ('conversation-index.json','portable-state.json','conversations.json')) or (parent/'json').is_dir() and (parent/'markdown').is_dir()) else selected
-    indexes=[root/n for n in ('portable-state.json','conversation-index.json') if (root/n).is_file()]
+    root=parent if selected.name.lower() in ('json','markdown','html','attachments','files') and (any((parent/n).is_file() for n in ('conversation-index.json','portable-state.json','conversations.json','viewer-handoff.json')) or (parent/'json').is_dir() and (parent/'markdown').is_dir()) else selected
+    indexes=[root/n for n in ('viewer-handoff.json','portable-state.json','conversation-index.json') if (root/n).is_file()]
     fingerprint=tuple((str(p),p.stat().st_mtime_ns,p.stat().st_size) for p in indexes);key=(str(root),fingerprint)
     with _lock:
         cached=_cache.get(key)
         if cached and time.monotonic()-cached[0]<10:return dict(cached[1])
-    merged={};warnings=[]
+    merged={};warnings=[];version=''
     for p in indexes:
         try:
-            for e in read_index(p):merged[e['id']]={**merged.get(e['id'],{}),**e}
+            data=json.loads(p.read_text(encoding='utf-8-sig')) if p.stat().st_size<=32*1024**2 else None
+            if data is None:raise ValueError('Exporter metadata exceeds the 32 MB limit.')
+            if isinstance(data,dict):version=str(data.get('version') or version)
+            for e in entries(data):merged[e['id']]={**merged.get(e['id'],{}),**e}
         except (ValueError,OSError) as error:warnings.append(p.name+': '+str(error))
     available=missing=pending=0
     for e in merged.values():
@@ -103,7 +106,7 @@ def inspect_folder(path):
         else:missing+=1
         if e.get('attachment_pending') or e.get('attachmentPending'):pending+=1
     standard=(root/'conversations.json').is_file()
-    result=dict(root=str(root),selected=str(selected),format='ChatGPT Exporter' if indexes else 'ChatGPT data export' if standard else 'Conversation folder',expected=len(merged),available=available,missing=missing,pending_attachments=pending,has_index=bool(indexes),has_json=(root/'json').is_dir() or standard,has_markdown=(root/'markdown').is_dir(),warnings=warnings,generated_at=time.time())
+    result=dict(root=str(root),selected=str(selected),format='ChatGPT Exporter' if indexes else 'ChatGPT data export' if standard else 'Conversation folder',exporter_version=version,expected=len(merged),available=available,missing=missing,pending_attachments=pending,has_index=bool(indexes),has_library=(root/'attachments/library-index.json').is_file(),has_handoff=(root/'viewer-handoff.json').is_file(),has_json=(root/'json').is_dir() or standard,has_markdown=(root/'markdown').is_dir(),warnings=warnings,generated_at=time.time())
     with _lock:
         _cache[key]=(time.monotonic(),dict(result));_cache.move_to_end(key)
         while len(_cache)>6:_cache.popitem(last=False)

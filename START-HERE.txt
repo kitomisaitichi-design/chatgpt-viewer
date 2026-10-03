@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.1.6
+OFFLINE CHAT VIEWER v1.1.7
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
@@ -96,3 +96,14 @@ Export folders can inspect the exporter index and suggest its root. Import expor
 
 VERSION 1.1.6
 Find titles/folders in the sidebar; Filters combines read status, projects, pins, untitled and created/updated ranges with current type and ordering. Use /, J/K, R, P, or ? for shortcuts. Full message search is still Ctrl+K. Keep .viewer-data during upgrades.
+
+NEW IN 1.1.7
+Exporter 2.4.4 handoff and shared file/history support. In Backups & Drive,
+choose Markdown, JSON/sessions, images and other files independently.
+ZIPs preserve original folders and add cross-link indexes, SHA-256 hashes
+and save-state JSON/CSV. Extract the entire ZIP to open OPEN-ARCHIVE.html.
+Quick scan populates detected exports and Drive locations, preserving choices.
+Copy existing ZIPs to Drive verifies completed local ZIPs without rescanning.
+Google Drive for desktop handles the cloud upload; check its sync status.
+
+Drag the sidebar edge to resize; double-click to reset. Its width is saved.

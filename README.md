@@ -1,11 +1,50 @@
-# Offline Chat Viewer · v1.1.6
+# Offline Chat Viewer · v1.1.7
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.6-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.6/Offline-Chat-Viewer-v1.1.6-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.6/Offline-Chat-Viewer-v1.1.6-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.7-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.7/Offline-Chat-Viewer-v1.1.7-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.7/Offline-Chat-Viewer-v1.1.7-Windows.zip.sha256.txt)
+
+## What the viewer does
+
+Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Your exports remain untouched.
+
+The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## Exporter 2.4.4 and selective ZIPs · v1.1.7
+
+- Recognizes `viewer-handoff.json` alongside the conversation index, portable state and Library index. Folder checks show the saved exporter version; selecting `json` or `markdown` detects its parent export root.
+- Files & Library retains shared chat/Library source names, source presence/history, previous saved versions and chat references. Filter Chat, Library, retained references or previous versions; search original source names. Historical versions remain distinct and an older same-size file with a conflicting SHA-256 cannot substitute for the current version.
+- Choose **Markdown**, **JSON / sessions**, **Images** and **Other files** independently in **Backups & Drive → Include in each ZIP**. Exporter metadata remains included. Unselected large assets are not hashed. An empty selection or metadata-only source fails with an actionable message rather than producing a misleading tiny full backup.
+- Drag the sidebar edge to resize it (260–560 px, bounded by the viewport). Its width persists across versions and backups. Arrow keys adjust the focused edge; double-click resets it. Navigation, type tabs, organization and list sections have clearer spacing and subtle borders. Resizing updates width once per animation frame without rebuilding chats or resetting scroll.
+- Source and Drive candidate menus populate after **Quick scan & autofill**, while existing folder choices remain authoritative. Detection prefers mounted `G:\My Drive` and correctly locates My Drive inside mirrored GoogleDrive folders. Choosing a detected Drive location fills its dedicated backup subfolder; your loader folder and traversal remain the default backup source.
+- **Copy existing ZIPs to Drive** verifies each completed local ZIP against its saved SHA-256 and copies the selected full/progress slots without rescanning the source or rebuilding. It works with an offline source. Google Drive for desktop performs cloud sync and reports upload completion; this action confirms the local copy.
+- Progress backups follow Exporter 2.4.4's explicit shared-file references, including files outside a chat-specific attachment folder. Backups also retain sidebar date preferences, catalog filters and read-state records when settings restoration is selected.
+
+### ZIP layout and links
+
+```text
+OPEN-ARCHIVE.html           Offline browser of chats and file types
+archive/                   Selected original files and folders
+  json/                    Conversation JSON, when selected/present
+  markdown/                Conversation Markdown, when selected/present
+  attachments/             Original saved image and other attachment paths
+  viewer-handoff.json      Exporter metadata, when present
+  conversation-index.json  Exporter metadata, when present
+indexes/                   Markdown, JSON, images, other files, metadata indexes
+archive-index.json         Conversation-to-document/attachment cross-links
+save-state.json            Original paths, kind, size, SHA-256, timestamps,
+                           saved state, mode and conversation IDs
+save-state.csv             The same file-state table for spreadsheet inspection
+backup-manifest.json       Selected formats, recovery baseline, deleted/missing paths
+viewer-settings.json       Safe appearance, reading and organization preferences
+```
+
+Extract the entire ZIP before opening `OPEN-ARCHIVE.html`. Index groups organize files by type without relocating originals; moving existing attachments would break relative links. The index links only included files. Original exporter metadata and document references may still name intentionally excluded attachments; reselect those content types for a complete linked recovery archive. JSON/session extensions inside attachment folders are **Other files**, so exported documents are not mistaken for conversations. Image selection includes raster formats and saved SVG files; SVG remains a downloadable file in the viewer.
+
+Full ZIPs contain all selected saved content in the discovery boundary. Progress ZIPs contain changes and their selected conversation companions; the first progress ZIP includes everything selected. A later small progress ZIP can be valid. Keep the full ZIP as the base for unchanged files. File hashes change when contents change; stable slot names avoid a new daily filename. Save-state timestamps describe the source files, not proof of exporter completion. Missing remote files cannot be recreated by the viewer.
 
 ## Start on Windows / Edge
 
@@ -175,20 +214,35 @@ If an export omits the account plan, the viewer cannot prove whether Luna was se
 
 ## Validation
 
-The release was checked with 145 automated backend tests and JavaScript checks for widget extraction, layered sorting, type filtering and syntax colouring. Tests include deterministic ZIPs, attachment links, shared folder traversal, progress companions, desktop copying and cancellation, a stalled foreground reader, imports retaining original identity/dates/positions, DPAPI protection, OAuth state/PKCE, resumable uploads and stable remote file IDs. OAuth and Drive responses were mocked; no live Google account connection or cloud upload is claimed. A temporary Windows idle task was registered, inspected and removed successfully in the preceding release. The bundled Windows runtime was used for backend checks.
+v1.1.7: **188 backend tests**, JavaScript syntax checks, renderer/geometry/cache checks and combined catalog-filter/order checks. New regression coverage includes handoff-only exports, shared progress companions, historical source metadata, hash conflicts, selectable formats, hash/state/index consistency, attachment-only cross-links, omitted-file hashing, policy changes and verified migration with an offline source. Isolated Edge checks exercise content choices, source/Drive suggestions, local ZIP creation and copying to a local test destination.
 
-Windows Edge checks exercised the local full/progress backup controls, source preview and API-free desktop interface. Reader checks from the preceding release covered the reported charts and saved interactive app, hover details, exact highlights, cross-chat search navigation, overlapping four-column tables in both views, folded Python/shell code, category ordering and per-group sorting.
+The diagnostic test now allows realistic Windows loopback scheduling while still timing out a deliberately stalled endpoint. OAuth and Drive API responses are mocked; no live Google upload or unattended scheduled run is claimed for this update. Keep `.viewer-data` during app replacement. Personal preferences and archive data are verified separately from the clean portable ZIP.
 
-A fresh portable installation was checked in Edge: no example chats are loaded and no automatic nearby-folder scan runs before choosing an export folder. The documentation preview shows the clean welcome screen. Personal exports, private indexes, account-specific ground-truth scripts/lists, test fixtures and test helpers are excluded.
+## Version history
 
-Optional semantic engine/model installation was not repeated for this update. Exact, typo-tolerant and ordinary text search require no downloads.
+Earlier 1.0.x builds were distributed as portable/development packages. This history summarizes their recorded changes; it does not imply every version has a public GitHub release asset. The current feature descriptions above explain the retained behavior. [Published release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases) provide additional validation and upgrade details.
 
-The portable ZIP contains the application, local web assets, bundled Python/runtime libraries and their licenses. Conversation files, personal indexes/settings, account ground-truth helpers, development scripts and test fixtures are excluded.
-
-## Rollback
-
-Stop the updated viewer, restore the previous app files, keep .viewer-data, then run START-VIEWER.bat. Source exports are never altered. Move .viewer-data aside only if you intentionally want a fresh local index and settings.
-
-## Licenses
-
-Third-party licenses accompany the bundled CPython, Microsoft runtime, pip, Marked, KaTeX, Highlight.js and branch helper components. Keep their license files when redistributing this portable application.
+| Version | Recorded changes |
+| --- | --- |
+| **1.1.7** | Exporter 2.4.4 handoff, shared source/history and version support; selective ZIP formats; typed indexes and SHA-256 state JSON/CSV; shared progress attachments; verified existing-ZIP Drive migration; candidate autofill; filter/read-state backup restoration; adjustable saved sidebar width and refined section styling. |
+| **1.1.6** | Compact catalog search; combined read/project/pin/untitled/inclusive date filters; sidebar dates and created/updated/message metadata; read revisions; quick rename and keyboard navigation; reverse alphabetical/updated sorts; filtered drags preserve hidden placements. |
+| **1.1.5** | Exporter-root inspection and portable-state metadata merging; JSON preference and newer-copy import protection; per-chat searchable file previews/downloads; bounded source/Markdown caches; indexed long-chat paging; numeric chart range/extrema/gaps and lazy data tables. |
+| **1.1.4** | Exporter 2.4.1 Files & Library; saved/manual/attention filters; size/hash-checked downloaded-copy imports; streamed downloads and source-chat links; Python 3.10–3.12 ZIP compression compatibility. |
+| **1.1.3** | Shared preferences and encrypted backup history across versions; quick rename/pin/folder/colour/sticky menus; recoverable drag-to-Trash; catalog deltas; 1–168 hour backup interval, idle/power/local-only choices; safe extra-ZIP recovery/deduplication. |
+| **1.1.2** | Clean first launch; Windows file-lock retry-safe backup state; working local-folder opening; mounted/mirrored Drive detection and autofill; modern folder dialog and path copying; ZIP-size labels; cached attachment references and linear parsing. |
+| **1.1.1** | API-free Drive for desktop route; loader-matched backup discovery/traversal; actual original Markdown/JSON/attachment ZIPs and linked offline browser; visible local save folders; full/progress recovery and optional integration. |
+| **1.1.0** | Deterministic local full/progress ZIPs, direct Google account route and idle scheduling; stable sidebar nodes/scroll anchors and batched drag saves; recurring scans off by default with interval controls; readable text open and improved chart inspection. |
+| **1.0.13** | Saved chart and sandboxed HTML app rendering; hover/keyboard inspection; genuine code folding and language inference; fitted-table overlap repair; exact in-chat highlights and cross-chat match navigation; layered group/type/pin sorting and batched organization. |
+| **1.0.12** | Shared source reads and message-specific fragments; isolated bounded syntax worker; sidebar row reuse; request cancellation/observer cleanup; indexed-status restoration; canonical type counts/manual correction and cleaner exported titles. |
+| **1.0.11** | Markdown/colouring independence and automatic rendering recovery; canonical Chat/Work/Codex labels and cached receipt repairs; readable native dropdowns in black/dark/light themes. |
+| **1.0.10** | Fit/wide/compact tables; saved filename chips; incomplete Python detection; formula retry; vertical text chains; exact/typo/completion search; automatic portable semantic setup and Windows runtime helpers. |
+| **1.0.9** | Shell pipeline panels and unfenced JSON detection; readable Unicode/indentation; exact numeric tokens; Raw/Formatted toggle and original-text copy. |
+| **1.0.8** | Render long-message prefixes before fetching the rest; delayed-table retry and scroll preservation; shell heredoc code panels with gutters, wrapping, folding and copying. |
+| **1.0.7** | Python scripts containing Markdown fences inside string literals keep their code presentation and exact text. |
+| **1.0.6** | Saved code/execution-output blocks and unfenced Python recognition; offline syntax highlighting; separate stdout/stderr panels; exported hyperlink/source association fixes; Tool details paging. |
+| **1.0.5 / repacked** | Bounded body-download retry; Unicode-safe message fragments; worker/lazy Markdown; folding controls; wide/compact expandable tables; explicit source chips and original copying. A corrected repacked package was supplied. |
+| **1.0.4** | Local diagnostics for stalled status/transfer requests, with timing and byte reports excluding private conversation text and launch tokens. |
+| **1.0.3** | Database-free startup state, early Markdown titles, foreground source reading and background scan initialization repairs; offline math and source chips. |
+| **1.0.2** | Selected-chat priority; separate background indexing; early manifest coverage; bounded recent-chat cache and paged messages; obsolete-request cancellation and retry. |
+| **1.0.1** | Correct script MIME types; usable folder controls during delayed startup; overlapping discovery/indexing with checkpoints, pause/cancel and persisted scan scope. |
+| **1.0.0** | Initial portable local Markdown/JSON/Codex reader; branches, model receipts, math/tables/code, archive search, categories/pins/preferences and optional semantic search. |

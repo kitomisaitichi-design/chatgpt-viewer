@@ -30,17 +30,17 @@ class FileCatalog:
             if p.is_dir():
                 roots.add(p)
                 # The selected directory may be json/ inside an exporter backup.
-                if p.name.lower() in ('json','markdown') and (p.parent/'conversation-index.json').is_file():roots.add(p.parent)
+                if p.name.lower() in ('json','markdown') and any((p.parent/name).is_file() for name in ('conversation-index.json','viewer-handoff.json','portable-state.json')):roots.add(p.parent)
         imports=self.archive.data_dir/'imports'
         if imports.is_dir():
             for p in imports.glob('*/conversation-index.json'):roots.add(p.parent.resolve())
             for p in imports.glob('*/attachments/library-index.json'):roots.add(p.parent.parent.resolve())
         out=[]
         for root in roots:
-            for relative in ('portable-state.json','conversation-index.json','attachments/library-index.json'):
+            for relative in ('portable-state.json','viewer-handoff.json','conversation-index.json','attachments/library-index.json'):
                 path=root/relative
                 if path.is_file():out.append((root,path))
-        return sorted(out,key=lambda x:str(x[1]))
+        return sorted(out,key=lambda x:(x[1].name=='library-index.json',str(x[1])))
     def refresh(self):
         manifests=self.manifests();signature=[]
         for root,path in manifests:
@@ -55,37 +55,45 @@ class FileCatalog:
             if library and data.get('schema')!='chatgpt-library-index/v1':notes.append('Unknown Library index format: '+str(path));continue
             rows=data.get('entries',[]) if library else exporter_entries(data)
             if not isinstance(rows,list):continue
-            items=[]
+            items=[(f,f.get('conversation_ids',[]),True) for f in data.get('library',[]) if isinstance(f,dict)] if isinstance(data.get('library'),list) else []
             for row in rows:
                 if not isinstance(row,dict):continue
-                if library:items.append((row,row.get('conversation_ids',[])))
+                if library:items.append((row,row.get('conversation_ids',[]),True))
                 else:
                     for f in row.get('attachments',[]) if isinstance(row.get('attachments'),list) else []:
-                        if isinstance(f,dict):items.append((f,[row.get('id')]))
-            for f,cids in items:
-                fid=str(f.get('file_id') or f.get('id') or f.get('path') or f.get('name') or '')
+                        if isinstance(f,dict):items.append((f,[row.get('id')],False))
+            for f,cids,file_library in items:
+                fid=str((f.get('id') if f.get('historical') else f.get('file_id')) or f.get('id') or f.get('path') or f.get('name') or '')
                 if not fid:continue
                 key=hashlib.sha256((str(root)+'\0'+fid).encode()).hexdigest()[:32]
                 relative=safe_relative(f.get('path')) or safe_relative(f.get('expected_path'))
                 target=(root/relative).resolve() if relative else None
                 if target and not target.is_relative_to(root):target=None;relative=None
                 previous=entries.get(key,{})
-                if previous.get('target') and previous['target'].is_file() and (not target or not target.is_file()) and (f.get('size') is None or previous.get('size')==f.get('size')):
+                compatible_hash=not f.get('sha256') or f.get('sha256')==previous.get('sha256')
+                if previous.get('target') and previous['target'].is_file() and compatible_hash and (not target or not target.is_file()) and (f.get('size') is None or previous.get('size')==f.get('size')):
                     target=previous['target'];relative=previous['relative']
-                conversations=sorted({str(c) for c in [*previous.get('conversations',[]),*(cids if isinstance(cids,list) else [])] if c})
+                refs=[*previous.get('source_refs',[]),*(f.get('source_refs',[]) if isinstance(f.get('source_refs'),list) else [])]
+                refs=[dict((k,str(r[k])) for k in ('kind','name','conversationId','presence','sourceKey') if r.get(k) is not None) for r in refs if isinstance(r,dict)]
+                refs=list({json.dumps(r,sort_keys=True):r for r in refs}.values())
+                conversations=sorted({str(c) for c in [*previous.get('conversations',[]),*(cids if isinstance(cids,list) else []),*(r.get('conversationId') for r in refs)] if c})
                 manual=f.get('manual_url') or 'https://chatgpt.com/library'
                 if not str(manual).startswith('https://chatgpt.com/'):manual='https://chatgpt.com/library'
-                entries[key]={**previous,'key':key,'id':fid,'name':str(f.get('name') or f.get('filename') or fid),'size':f.get('size'),'mime':f.get('mime') or f.get('mime_type'),'status':f.get('status','unknown'),'error':str(f.get('error') or ''),'relative':relative,'root':root,'target':target,'conversations':conversations,'sha256':f.get('sha256'),'manual_url':manual,'source':'library' if library else previous.get('source','attachment')}
+                sources=set(previous.get('sources',[]));sources.update(r['kind'] for r in refs if r.get('kind') in ('chat','library'))
+                if file_library and not refs:sources.add('library')
+                elif not file_library:sources.add('chat')
+                retained=bool(f.get('historical')) or any(r.get('presence') not in (None,'','present') for r in refs)
+                entries[key]={**previous,'key':key,'id':fid,'name':str(f.get('name') or f.get('filename') or fid),'size':f.get('size'),'mime':f.get('mime') or f.get('mime_type'),'status':f.get('status','unknown'),'error':str(f.get('error') or ''),'relative':relative,'root':root,'target':target,'conversations':conversations,'sha256':f.get('sha256') or (previous.get('sha256') if target==previous.get('target') else None),'manual_url':manual,'source':'library' if file_library else previous.get('source','attachment'),'source_refs':refs,'sources':sorted(sources),'historical':bool(f.get('historical')),'retained':retained,'duplicate_of':f.get('duplicate_of'),'version_info':f.get('version_info') if isinstance(f.get('version_info'),dict) else None}
         self.entries=entries;self.notes=notes;self.signature=signature
     def public(self,item):
         target=item['target'];exists=bool(target and target.is_file() and not target.is_symlink() and target.resolve().is_relative_to(item['root']));actual=target.stat().st_size if exists else None
         expected=item['size'];matches=exists and (expected is None or actual==expected)
         status='saved' if matches else 'missing' if item['status']=='saved' else item['status']
-        return {k:item[k] for k in ('key','id','name','mime','error','conversations','manual_url','source','sha256')} | {'size':actual if exists else expected,'status':status,'available':matches,'path':item['relative'],'image':bool(target and target.suffix.lower() in IMAGE_EXT)}
-    def list(self,search='',status='all',conversation='',offset=0,limit=50):
+        return {k:item[k] for k in ('key','id','name','mime','error','conversations','manual_url','source','sha256','source_refs','sources','historical','retained','duplicate_of','version_info')} | {'size':actual if exists else expected,'status':status,'available':matches,'path':item['relative'],'image':bool(target and target.suffix.lower() in IMAGE_EXT)}
+    def list(self,search='',status='all',conversation='',offset=0,limit=50,source='all'):
         with self.lock:
             self.refresh();rows=[self.public(e) for e in self.entries.values()]
-            q=str(search).casefold();filtered=[r for r in rows if (not q or q in (r['name']+' '+r['id']).casefold()) and (not conversation or conversation in r['conversations']) and (status=='all' or status=='saved' and r['available'] or status=='manual' and not r['available'] and (r['status']=='manual' or isinstance(r['size'],(int,float)) and r['size']>=10_000_000) or status=='attention' and not r['available'])]
+            q=str(search).casefold();filtered=[r for r in rows if (not q or q in (' '.join([r['name'],r['id'],*(ref.get('name','') for ref in r['source_refs']),*r['conversations']])).casefold()) and (source=='all' or source in r['sources'] or source=='retained' and r['retained'] or source=='history' and r['historical']) and (not conversation or conversation in r['conversations']) and (status=='all' or status=='saved' and r['available'] or status=='manual' and not r['available'] and (r['status']=='manual' or isinstance(r['size'],(int,float)) and r['size']>=10_000_000) or status=='attention' and not r['available'])]
             filtered.sort(key=lambda r:(r['name'].casefold(),r['key']));offset=max(0,int(offset));limit=max(1,min(100,int(limit)))
             return {'entries':filtered[offset:offset+limit],'total':len(filtered),'offset':offset,'has_more':offset+limit<len(filtered),'counts':{'total':len(rows),'saved':sum(r['available'] for r in rows),'manual':sum(not r['available'] and (r['status']=='manual' or isinstance(r['size'],(int,float)) and r['size']>=10_000_000) for r in rows)},'notes':self.notes}
     def file(self,key):

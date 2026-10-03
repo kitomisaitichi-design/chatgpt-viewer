@@ -14,7 +14,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.6'
+VERSION = '1.1.7'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -731,7 +731,7 @@ class Archive:
                         stat=f.stat()
                         if stat.st_size>512*1024*1024:raise ValueError('File over 512 MiB; split the export first.')
                         fp=str(stat.st_mtime_ns)+':'+str(stat.st_size);rank=(int(f.suffix.lower()=='.json'),stat.st_mtime_ns)
-                        ismeta=f.name.lower()=='conversation-index.json' or ('portable-state' in f.name.lower() and f.suffix.lower()=='.json')
+                        ismeta=f.name.lower() in ('conversation-index.json','viewer-handoff.json') or ('portable-state' in f.name.lower() and f.suffix.lower()=='.json')
                         with self.connect() as db:
                             cached=list(db.execute('SELECT id,fingerprint FROM chats WHERE path=?',(str(f),)))
                             record=db.execute('SELECT fingerprint,status FROM scanned_files WHERE path=?',(str(f),)).fetchone()
@@ -1214,7 +1214,7 @@ class Handler(BaseHTTPRequestHandler):
                     while part:=file.read(128*1024):self.wfile.write(part)
                 return
             if url.path=='/api/files':
-                self.send(self.server.files.list(q.get('search',''),q.get('status','all'),q.get('conversation',''),q.get('offset',0),q.get('limit',50)));return
+                self.send(self.server.files.list(q.get('search',''),q.get('status','all'),q.get('conversation',''),q.get('offset',0),q.get('limit',50),q.get('source','all')));return
             if url.path=='/api/files/content':
                 from library_files import IMAGE_EXT
                 f,entry=self.server.files.file(q.get('key',''));inline=q.get('inline')=='1' and f.suffix.lower() in IMAGE_EXT
@@ -1324,6 +1324,7 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path=='/api/backup/select-folder':
                 folder=self.server.backup.drive.folder(d.get('id',''));self.send(self.server.backup.save_config({'folder_id':folder['id'],'folder_name':folder['name']}));return
             elif self.path=='/api/backup/run':self.send(self.server.backup.start(upload=d.get('upload',True)));return
+            elif self.path=='/api/backup/migrate':self.send(self.server.backup.migrate());return
             elif self.path=='/api/backup/cleanup':self.send(self.server.backup.cleanup());return
             elif self.path=='/api/backup/cancel':self.server.backup.cancel.set()
             elif self.path=='/api/backup/schedule':self.send(self.server.backup.schedule(bool(d.get('enabled'))));return

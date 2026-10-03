@@ -4,7 +4,7 @@ from pathlib import Path,PurePosixPath
 from contextlib import contextmanager
 from drive_backup import Drive,read_private,save_private
 from discovery import scan_boundary
-from export_bundle import documents as discover_documents,asset_paths,counts,conversation_map,progress_files,linked_index
+from export_bundle import documents as discover_documents,asset_paths,counts,conversation_map,progress_files,linked_index,FORMATS,file_kind,select_files,save_state
 from atomic_files import atomic_bytes
 from folder_tools import drive_suggestion,open_folder
 from backup_policy import interval_seconds,power_allowed,retire_extras
@@ -59,7 +59,7 @@ def local_links(text):
         except ValueError:pass
     return {urllib.parse.unquote(value.split('#')[0].split('?')[0]).replace('\\','/') for value in values if isinstance(value,str) and value and not re.match(r'^(?:https?:|data:|mailto:|javascript:|#)',value,re.I)}
 
-def plan_files(root,cache=None,progress=lambda **kw:None,check=lambda:None,documents=None,exclude=(),links=None,reference_cache=None):
+def plan_files(root,cache=None,progress=lambda **kw:None,check=lambda:None,documents=None,exclude=(),links=None,reference_cache=None,formats=FORMATS):
     root=Path(root).expanduser().resolve()
     if not root.is_dir() or root.parent==root:raise ValueError('Choose a specific export folder, not a whole drive.')
     cache=cache or {};missing=[];links={} if links is None else links
@@ -85,6 +85,7 @@ def plan_files(root,cache=None,progress=lambda **kw:None,check=lambda:None,docum
             elif not ref.startswith(('sandbox:','sediment:','file-service:')):missing.append(dict(document=p.relative_to(root).as_posix(),reference=ref,reason='Not saved locally'))
     # Exporters sometimes keep binary attachments by ID without a resolvable text link.
     paths.update(asset_paths(root,documents,check,exclude))
+    paths={p for p in paths if file_kind(p.relative_to(root).as_posix())=='metadata' or file_kind(p.relative_to(root).as_posix()) in formats}
     result={};total=len(paths)
     for index,p in enumerate(sorted(paths)):
         check();relative=p.relative_to(root).as_posix();s=p.stat();old=cache.get(relative,{})
@@ -114,7 +115,9 @@ def build_zip(root,destination,files,manifest,settings=None,progress=lambda **kw
             if value is not None:
                 info=zipfile.ZipInfo(name,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;z.writestr(info,json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')))
         if index:
-            for name,value in [('archive-index.json',json.dumps(index[0],ensure_ascii=False,sort_keys=True,separators=(',',':'))),('OPEN-ARCHIVE.html',index[1])]:
+            state,table=save_state(files,index[0]['conversations'],manifest['mode'])
+            grouped=[('indexes/'+kind+'.json',json.dumps({'schema':'offline-chat-viewer/file-group-v1','kind':kind,'base':'../','files':[r for r in state['files'] if r['kind']==kind]},ensure_ascii=False,sort_keys=True,separators=(',',':'))) for kind in (*FORMATS,'metadata')]
+            for name,value in [('archive-index.json',json.dumps(index[0],ensure_ascii=False,sort_keys=True,separators=(',',':'))),('OPEN-ARCHIVE.html',index[1]),('save-state.json',json.dumps(state,ensure_ascii=False,sort_keys=True,separators=(',',':'))),('save-state.csv',table),*grouped]:
                 info=zipfile.ZipInfo(name,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;z.writestr(info,value)
     check();os.replace(temporary,destination)
     return digest(destination,check)
@@ -167,7 +170,7 @@ class BackupManager:
             self.state_path=shared
         self.folder=Path(self.config()['local_folder']);self.folder.mkdir(parents=True,exist_ok=True)
     def config(self):
-        settings=self.archive.settings();default=dict(source=settings.get('scan_start',''),up=settings.get('scan_up',0),source_mode='loader',route='desktop',local_folder=str(self.data.resolve().parent/'Backups'),sync_folder='',enabled=False,cadence='daily',interval_hours=24,idle_minutes=10,idle_required=True,ac_only=True,auto_upload=True,cleanup_extras=True,modes='both',folder_id='',folder_name='')
+        settings=self.archive.settings();default=dict(source=settings.get('scan_start',''),up=settings.get('scan_up',0),source_mode='loader',route='desktop',local_folder=str(self.data.resolve().parent/'Backups'),sync_folder='',enabled=False,cadence='daily',interval_hours=24,idle_minutes=10,idle_required=True,ac_only=True,auto_upload=True,cleanup_extras=True,modes='both',include_formats=list(FORMATS),folder_id='',folder_name='')
         if self.config_path.exists():
             saved=json.loads(self.config_path.read_text(encoding='utf-8'));default.update(saved)
             if 'interval_hours' not in saved:default['interval_hours']=168 if saved.get('cadence')=='weekly' else 24
@@ -178,10 +181,13 @@ class BackupManager:
         return default
     def save_config(self,values):
         config=self.config()
-        for k in ('source','up','source_mode','route','local_folder','sync_folder','cadence','interval_hours','idle_minutes','idle_required','ac_only','auto_upload','cleanup_extras','modes','folder_id','folder_name'):
+        for k in ('source','up','source_mode','route','local_folder','sync_folder','cadence','interval_hours','idle_minutes','idle_required','ac_only','auto_upload','cleanup_extras','modes','include_formats','folder_id','folder_name'):
             if k in values:config[k]=values[k]
         if 'source' in values and 'source_mode' not in values:config['source_mode']='custom'
         if config['source_mode'] not in ('loader','custom') or config['route'] not in ('desktop','api'):raise ValueError('Invalid backup source or destination method.')
+        formats=config['include_formats']
+        if not isinstance(formats,list) or not formats or any(f not in FORMATS for f in formats):raise ValueError('Select at least one content type: Markdown, JSON, images or other files.')
+        config['include_formats']=[f for f in FORMATS if f in formats]
         if config['source_mode']=='loader':
             settings=self.archive.settings();config.update(source=settings.get('scan_start',''),up=settings.get('scan_up',0))
         if not config['local_folder']:config['local_folder']=str(self.data.resolve().parent/'Backups')
@@ -209,9 +215,10 @@ class BackupManager:
         config,start,root=self.scope();excluded=tuple(Path(p).resolve() for p in (str(self.data),config['local_folder'],config['sync_folder']) if p)
         docs=discover_documents(start,root,self.cancel,self.app,excluded)
         links={}
-        if hashes:files,fingerprint,missing=plan_files(root,(state or {}).get('hash_cache'),self.update,self.check,docs,excluded,links,state.setdefault('reference_cache',{}) if state is not None else None)
+        if hashes:files,fingerprint,missing=plan_files(root,(state or {}).get('hash_cache'),self.update,self.check,docs,excluded,links,state.setdefault('reference_cache',{}) if state is not None else None,config['include_formats'])
         else:
             paths=set(docs)|asset_paths(root,docs,self.check,excluded);files={p.relative_to(root).as_posix():{'size':p.stat().st_size} for p in paths};fingerprint='';missing=[]
+            files=select_files(files,config['include_formats'])
         return config,root,files,fingerprint,missing,links
     def preview(self):
         # Preview checks file names and sizes, not multi-gigabyte contents or hashes.
@@ -276,28 +283,51 @@ class BackupManager:
             with job_lock(self.lock_path):self.run(upload)
         except InterruptedError as e:self.update(phase='Waiting' if self.scheduled else 'Cancelled',error=str(e),force=True)
         except Exception as e:self.update(phase='Needs attention',error=str(e),force=True)
+    def migrate(self):
+        """Copy verified, completed ZIPs; do not rescan or rebuild an offline source."""
+        if self.worker and self.worker.is_alive():raise ValueError('A backup or import is already running.')
+        config=self.config()
+        if config['route']!='desktop' or not self.ready(config):raise ValueError('Choose an available Drive for desktop backup folder first.')
+        self.cancel.clear();self.scheduled=False
+        def copy():
+            try:
+                with job_lock(self.lock_path):
+                    state=self.state();modes=['full','progress'] if config['modes']=='both' else [config['modes']];copied=0
+                    self.update(phase='Copying completed ZIPs',done=0,total=0,force=True)
+                    for mode in modes:
+                        slot=state.get('slots',{}).get(mode,{});path=self.local_path(mode)
+                        if not slot.get('sha256') or not path.is_file():continue
+                        self.check();self.update(phase='Copying: verifying '+mode+' ZIP',done=0,total=path.stat().st_size,force=True)
+                        if str(path)!=slot.get('path') or digest(path,self.check)[0]!=slot['sha256']:raise ValueError('The '+mode+' ZIP does not match its saved hash. Create local ZIPs before copying.')
+                        self.publish_desktop(path,config['sync_folder'],slot,state);copied+=1
+                    if not copied:raise ValueError('Create local ZIPs first. There are no completed ZIPs in the selected local folder.')
+                    if config['cleanup_extras']:state['cleanup']=self.cleanup(config,state,modes)
+                    save_private(self.state_path,state);self.update(phase='Completed ZIPs copied',done=1,total=1,message='Copied '+str(copied)+' verified ZIPs. Google Drive for desktop handles cloud sync.',force=True)
+            except InterruptedError as e:self.update(phase='Cancelled',error=str(e),force=True)
+            except Exception as e:self.update(phase='Needs attention',error=str(e),force=True)
+        self.worker=threading.Thread(target=copy,daemon=True);self.worker.start();return {'started':True}
     def run(self,upload=True):
         config=self.config();state=self.state();self.update(phase='Preparing backup',done=0,total=0,force=True)
         if not config['source']:raise ValueError('Choose the export folder first.')
         if upload and not self.ready(config):raise ValueError('Choose the Google Drive for desktop folder, or connect the optional direct account route. Local ZIP creation needs neither.')
         config,root,files,fingerprint,missing,links=self.inventory(True,state)
         self.folder=Path(config['local_folder']);self.folder.mkdir(parents=True,exist_ok=True)
-        if not files:raise ValueError('No Markdown or JSON exports were found in this folder.')
+        if not any(file_kind(p)!='metadata' for p in files):raise ValueError('No files match your selected content types in this export folder. Review the folder and content choices.')
         state['hash_cache']=files;state['last_checked']=time.time();state['missing_count']=len(missing);state['missing']=missing[:100];state['source_counts']=counts(files);state['scope_root']=str(root)
         settings=self.archive.settings();catalog=self.archive.catalog();organization=[{k:c.get(k) for k in ('id','category','pinned','position','alias','trashed','color','sticky')} for c in catalog];source_map=[];conversations=conversation_map(root,files,catalog)
         for c in conversations:
             related={p for doc in [*c.get('markdown',[]),*c.get('json',[])] for p in links.get(doc,[]) if p in files and p not in c.get('markdown',[]) and p not in c.get('json',[])};c['attachments']=sorted(set(c.get('attachments',[]))|related)
             for path in [*c.get('markdown',[]),*c.get('json',[])]:source_map.append(dict(path=path,**{k:c.get(k) for k in ('id','title','url','created','updated','kind','project')}))
         source_map.sort(key=lambda c:(c['path'],c['id']))
-        safe_settings={k:v for k,v in settings.items() if k in ('categories','groupOrder','groupSort','sort','group','type','kindOverrides','theme','accent','bg','side','text','fontSize','width','showProjects','showDates','rememberPosition','positions','lastChat','pageSize','autoRefresh','rescanIntervalMinutes','collapsed','closedGroups')}
+        safe_settings={k:v for k,v in settings.items() if k in ('categories','groupOrder','groupSort','sort','group','type','kindOverrides','theme','accent','bg','side','text','fontSize','width','showProjects','showDates','sidebarWidth','sidebarDates','catalogFilters','readChats','rememberPosition','positions','lastChat','pageSize','autoRefresh','rescanIntervalMinutes','collapsed','closedGroups')}
         presentation=dict(schema='offline-chat-viewer/v1',settings=safe_settings,organization=organization)
-        setting_hash=hashlib.sha256(json.dumps(['linked-bundle-v2',presentation,source_map],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        setting_hash=hashlib.sha256(json.dumps(['linked-bundle-v3',presentation,source_map,config['include_formats']],sort_keys=True,separators=(',',':')).encode()).hexdigest()
         fingerprint=hashlib.sha256((fingerprint+setting_hash).encode()).hexdigest()
-        delivery=config['route']+':'+(config['sync_folder'] if config['route']=='desktop' else config['folder_id']);previous=state.get('baseline',{}) if upload and state.get('baseline_destination',delivery)==delivery else state.get('local_baseline',{}) if not upload else {};changed=progress_files(files,previous,conversations);deleted=sorted(set(previous)-set(files));slots=state.setdefault('slots',{})
+        delivery=config['route']+':'+(config['sync_folder'] if config['route']=='desktop' else config['folder_id']);previous=state.get('baseline',{}) if upload and state.get('baseline_destination',delivery)==delivery else state.get('local_baseline',{}) if not upload else {};previous=select_files(previous,config['include_formats']);changed=progress_files(files,previous,conversations);deleted=sorted(set(previous)-set(files));slots=state.setdefault('slots',{})
         modes=['full','progress'] if config['modes']=='both' else [config['modes']]
         for mode in modes:
             self.check();selected=files if mode=='full' else changed;path=self.folder/('Chat-Archive-'+mode.title()+'.zip');slot=slots.setdefault(mode,{})
-            manifest=dict(schema='offline-chat-viewer/backup-v1',mode=mode,fingerprint=fingerprint,base_fingerprint=state.get('last_fingerprint') if mode=='progress' else None,files=selected,conversations=[c for c in source_map if c['path'] in selected],deleted=deleted if mode=='progress' else [],missing=missing,source=dict(selected=config['source'],up=config['up'],root=str(root)),counts=counts(selected))
+            manifest=dict(schema='offline-chat-viewer/backup-v1',mode=mode,fingerprint=fingerprint,base_fingerprint=state.get('last_fingerprint') if mode=='progress' else None,include_formats=config['include_formats'],files=selected,conversations=[c for c in source_map if c['path'] in selected],deleted=deleted if mode=='progress' else [],missing=missing,source=dict(selected=config['source'],up=config['up'],root=str(root)),counts=counts(selected))
             if slot.get('fingerprint')!=fingerprint or slot.get('path')!=str(path) or not path.exists():
                 required=sum(v['size'] for v in selected.values())
                 if shutil.disk_usage(self.folder).free<required+128*1024**2:raise ValueError('Not enough free space to safely build the ZIP. Free space and retry; the previous backup is kept.')
@@ -353,7 +383,7 @@ class BackupManager:
                     exporter_meta,by_path,manifests=metadata_sources(root,discovered)
                     for entry,manifest in manifests:
                         self.check();self.archive.register_manifest(entry,manifest,root)
-                    documents=[p for p in discovered if p.name.lower() not in ('backup-manifest.json','viewer-settings.json','conversation-index.json','archive-index.json','export-report.json') and 'portable-state' not in p.name.lower()]
+                    documents=[p for p in discovered if p.name.lower() not in ('backup-manifest.json','viewer-settings.json','conversation-index.json','archive-index.json','export-report.json','viewer-handoff.json') and 'portable-state' not in p.name.lower()]
                     # JSON preserves branches, citations and attachments. Read each
                     # indexed conversation once when its Markdown twin also exists.
                     json_ids={by_path[str(p)][0]['id'] for p in documents if p.suffix.lower()=='.json' and str(p) in by_path}
@@ -381,7 +411,7 @@ class BackupManager:
                     if restore_settings and (root/'viewer-settings.json').exists():
                         values=json.loads((root/'viewer-settings.json').read_text(encoding='utf-8'))
                         if values.get('schema')!='offline-chat-viewer/v1':raise ValueError('The archive contains an unrecognized settings backup.')
-                        allowed=('categories','groupOrder','groupSort','sort','group','type','kindOverrides','theme','accent','bg','side','text','fontSize','width','showProjects','showDates','rememberPosition','positions','lastChat','pageSize','autoRefresh','rescanIntervalMinutes','collapsed','closedGroups')
+                        allowed=('categories','groupOrder','groupSort','sort','group','type','kindOverrides','theme','accent','bg','side','text','fontSize','width','showProjects','showDates','sidebarWidth','sidebarDates','catalogFilters','readChats','rememberPosition','positions','lastChat','pageSize','autoRefresh','rescanIntervalMinutes','collapsed','closedGroups')
                         self.archive.save_settings({k:v for k,v in values.get('settings',{}).items() if k in allowed});self.archive.organize_many(values.get('organization',[]))
                     if self.archive.ui_cache is not None:
                         catalog=self.archive.catalog()
