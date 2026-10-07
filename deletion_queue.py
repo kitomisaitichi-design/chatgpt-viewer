@@ -1,4 +1,4 @@
-"""Durable deletion intent and exporter receipts. Never makes ChatGPT requests."""
+"""Durable deletion intent, recovery and verified browser/exporter receipts."""
 import hashlib, json, os, re, shutil, threading, time, uuid
 from pathlib import Path
 from atomic_files import atomic_bytes
@@ -23,6 +23,8 @@ class DeletionQueue:
             # A process restart never silently starts a destructive run.
             db.execute("UPDATE deletion_jobs SET state='paused' WHERE state IN ('preparing','waiting','running','retrying')")
         self.control(False)
+        from browser_companion import BrowserCompanion
+        self.browser=BrowserCompanion(self)
         # Upgrade existing verified receipts without changing content hashes or organization.
         from remote_state import record
         for row in self.rows():
@@ -39,9 +41,17 @@ class DeletionQueue:
         roots=self.roots()
         with self.archive.connect() as db:
             options={Path(r[0]).parent.resolve() for r in db.execute('SELECT manifest FROM manifest_entries WHERE cid=?',(cid,))}&roots.keys()
-        if len(options)!=1:raise ValueError('Remote actions require one unambiguous exporter account/index')
-        root=options.pop();return root,roots[root]
+        if len(options)==1:
+            root=options.pop();return root,roots[root]
+        if len(options)>1:raise ValueError('This chat belongs to several accounts. Choose its original export before deleting.')
+        with self.archive.connect() as db:
+            source=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? LIMIT 1',(cid,cid)).fetchone()
+        if not source:raise ValueError('Conversation was not found')
+        scopes=self.browser.connected_scopes()
+        if len(scopes)>1:raise ValueError('Connect only the ChatGPT account that owns this chat')
+        return Path(source['path']).resolve().parent,next(iter(scopes),'unbound')
     def check_remote(self,cid):
+        if self.browser.endpoint:return self.browser.check(cid)
         root,scope=self.chat_account(cid);bridge=read(root/'.viewer-queue/bridge.json')
         if bridge.get('connection',{}).get('blocked'):return dict(queued=False,blocked=True)
         target=root/'.viewer-queue/checks'/(cid+'.json');old=read(target)
@@ -50,7 +60,7 @@ class DeletionQueue:
         write(target,value);self.start();return dict(queued=True,id=value['id'])
     def reconnect(self):
         for root in self.roots():write(root/'.viewer-queue/reconnect.json',dict(nonce=uuid.uuid4().hex,updated=time.time()))
-        self.start();return dict(requested=True,message='Reconnecting through the browser worker; allow up to 30 seconds for its wake alarm.')
+        self.browser.reset();self.start();return dict(requested=True,message='Reconnect requested. Open the browser companion once if it has not been paired.')
     def collect_checks(self):
         from remote_state import record
         for root,scope in self.roots().items():
@@ -91,8 +101,7 @@ class DeletionQueue:
                 if not c:raise ValueError('Conversation was not found')
                 if Path(c['path']).suffix.lower()=='.jsonl' or c['kind']=='codex' and not c.get('url'):raise ValueError('Native Codex sessions support local Trash, not ChatGPT remote deletion')
                 options={Path(r[0]).parent.resolve() for r in db.execute('SELECT manifest FROM manifest_entries WHERE cid=?',(cid,))}&roots.keys()
-                if len(options)!=1:raise ValueError('Deletion requires one unambiguous exporter account/index for '+c['title'])
-                root=options.pop();prepared.append((cid,c,root,roots[root]))
+                root,scope=self.chat_account(cid);prepared.append((cid,c,root,scope))
         with self.lock,self.archive.connect() as db:
             for cid,c,root,scope in prepared:
                 old=db.execute('SELECT state,mode FROM deletion_jobs WHERE scope=? AND cid=?',(scope,cid)).fetchone()
@@ -120,6 +129,15 @@ class DeletionQueue:
                 if set(ids or [])!={r['id'] for r in rows}:raise ValueError('The queue changed. Review all pending chats before running')
                 # Backups happen asynchronously before a command becomes executable.
                 run=uuid.uuid4().hex
+                unbound=[r for r in rows if r['scope']=='unbound']
+                if unbound:
+                    scopes=self.browser.connected_scopes()
+                    if len(scopes)!=1:raise ValueError('Connect the browser companion to the account that owns these chats before running')
+                    with self.archive.connect() as db:
+                        db.execute("UPDATE deletion_jobs SET scope=? WHERE scope='unbound'",(next(iter(scopes)),))
+                with self.archive.connect() as db:
+                    for row in rows:
+                        db.execute("UPDATE browser_requests SET phase='preflight',attempts=0 WHERE job=? AND phase='done'",(row['id'],))
                 with self.archive.connect() as db:db.execute("UPDATE deletion_jobs SET state='preparing',run=?,error='' WHERE state NOT IN ('confirmed','cancelled')",(run,))
                 self.control(False,run)
             elif action in ('pause','stop'):
@@ -171,6 +189,8 @@ class DeletionQueue:
                     metadata=[json.loads(r['metadata']) for r in db.execute('SELECT manifest,metadata FROM manifest_entries WHERE cid=?',(row['cid'],)) if Path(r['manifest']).parent.resolve()==Path(row['root']).resolve()]
                     state=db.execute('SELECT state FROM deletion_jobs WHERE id=?',(row['id'],)).fetchone()
                 if not state or state['state']!='preparing':continue
+                command['executor']='browser-v1' if self.browser.endpoint else 'legacy-exporter'
+                if self.browser.endpoint:self.browser.configured(row['root'])
                 command['content_hash']=next((m.get('content_hash') for m in metadata if m.get('content_hash')),None)
                 write(Path(row['root'])/'.viewer-queue/commands'/(row['id']+'.json'),command)
                 with self.archive.connect() as db:db.execute("UPDATE deletion_jobs SET state='waiting',updated=? WHERE id=?",(time.time(),row['id']))
@@ -229,8 +249,9 @@ class DeletionQueue:
             bridge=read(root/'.viewer-queue/bridge.json')
             reset=read(root/'.viewer-queue/reconnect.json');connection=bridge.get('connection',{}) if bridge.get('scope')==scope else {}
             bridges.append(dict(root=str(root),scope=scope,connected=bridge.get('connected') is True and bridge.get('scope')==scope and time.time()-bridge.get('updated',0)<45,version=bridge.get('version',''),error=bridge.get('error',''),connection=connection,reconnecting=bool(reset.get('nonce') and connection.get('nonce')!=reset['nonce'] and time.time()-reset.get('updated',0)<90),fresh=time.time()-bridge.get('updated',0)<45))
-        jobs=[dict({k:v for k,v in r.items() if k!='receipt'},remote_state=json.loads(r['receipt'] or '{}').get('remote_state','')) for r in rows]
-        return dict(jobs=jobs,bridges=bridges,adapter_folder=self.archive.settings().get('exporterBridgeFolder',''))
+        jobs=[dict({k:v for k,v in r.items() if k!='receipt'},remote_state=json.loads(r['receipt'] or '{}').get('remote_state',''),until=json.loads(r['receipt'] or '{}').get('until',0),message=json.loads(r['receipt'] or '{}').get('message','')) for r in rows]
+        bridges+=self.browser.statuses()
+        return dict(jobs=jobs,bridges=bridges,companion_folder=str(Path(__file__).parent/'integration/browser-companion'),adapter_folder=self.archive.settings().get('exporterBridgeFolder',''))
     def close(self):
         self.stop_event.set();self.control(False)
         if self.worker and self.worker is not threading.current_thread():self.worker.join(timeout=3)

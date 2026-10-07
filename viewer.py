@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.16'
+VERSION = '1.1.17'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -1201,8 +1201,40 @@ class Server(ThreadingHTTPServer):
         from native_codex import NativeCodex
         self.native=NativeCodex(archive)
         from deletion_queue import DeletionQueue
-        self.deletions=DeletionQueue(archive,self.files);self.deletions.start()
+        self.deletions=DeletionQueue(archive,self.files)
+        self.deletions.browser.endpoint='http://127.0.0.1:'+str(self.server_port)
+        self.deletions.browser.prepare_extension()
+        for root in self.deletions.roots():self.deletions.browser.configured(root)
+        self.deletions.start()
+        self.native.deletion_queue.start()
+        self.queue_lock=threading.RLock()
+    def deletion_status(self):
+        value=self.deletions.status();catalog=dict(self.archive.ui_cache['chats']) if self.archive.ui_cache else {c['id']:c for c in self.archive.catalog()}
+        for row in self.native.deletion_queue.rows():
+            value['jobs'].append(dict(row,cid=row['session_id'],local=True,title=catalog.get(row['session_id'],{}).get('alias') or catalog.get(row['session_id'],{}).get('title') or row['session_id'],message='Waiting until Codex is closed' if row['state']=='waiting' else '',remote_state='local-removed' if row['state']=='confirmed' else ''))
+        value['jobs'].sort(key=lambda r:(r['created'],r['id']));return value
+    def queue_add(self,ids,mode):
+        if not isinstance(ids,list) or not 0<len(ids)<=1000:raise ValueError('Select between 1 and 1000 chats')
+        with self.queue_lock:
+            catalog={c['id']:c for c in self.archive.catalog()}
+            if any(cid not in catalog for cid in ids):raise ValueError('A selected conversation was not found')
+            local=[cid for cid in ids if Path(catalog[cid]['path']).suffix.lower()=='.jsonl'];remote=[cid for cid in ids if cid not in local]
+            if remote:self.deletions.enqueue(remote,mode)
+            if local:self.native.deletion_queue.enqueue(local,'recovery')
+            return self.deletion_status()
+    def queue_action(self,action,ids):
+        with self.queue_lock:
+            value=self.deletion_status();pending=[r for r in value['jobs'] if r['state'] not in ('confirmed','cancelled')]
+            if action=='run':
+                if not pending or set(ids or [])!={r['id'] for r in pending}:raise ValueError('The queue changed. Review every pending chat before running')
+                if any(r['state'] in ('preparing','waiting','running','retrying') or r.get('local') and r['run'] and r['state']=='queued' for r in pending):raise ValueError('The queue is already running')
+            remote=[r['id'] for r in pending if not r.get('local')];local=[r['id'] for r in pending if r.get('local')]
+            if action=='remove':remote=[i for i in ids or [] if i in remote];local=[i for i in ids or [] if i in local]
+            if remote:self.deletions.action(action,remote)
+            if local:self.native.deletion_queue.action(action,local)
+            return self.deletion_status()
     def server_close(self):
+        if hasattr(self,'native'):self.native.close()
         if hasattr(self,'deletions'):self.deletions.close()
         super().server_close()
     def transfer_status(self):
@@ -1221,6 +1253,9 @@ class Handler(BaseHTTPRequestHandler):
     def send(self,body,status=200,ctype='application/json',headers=None):
         if not isinstance(body,bytes):body=json.dumps(body,ensure_ascii=False,separators=(',',':')).encode()
         headers=dict(headers or {})
+        origin=self.headers.get('Origin','')
+        if self.path.startswith('/api/companion/') and re.fullmatch(r'(chrome|moz)-extension://[a-zA-Z0-9-]+',origin):
+            headers.update({'Access-Control-Allow-Origin':origin,'Vary':'Origin'})
         if len(body)>1024 and ctype.startswith(('application/json','text/','application/javascript')) and re.search(r'(?:^|,)\s*gzip\s*(?:,|$)',self.headers.get('Accept-Encoding','')):
             body=gzip.compress(body,compresslevel=3,mtime=0);headers.update({'Content-Encoding':'gzip','Vary':'Accept-Encoding'})
         self.send_response(status);self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(len(body)))
@@ -1264,7 +1299,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(b'',302,'text/plain',{'Location':'/','Set-Cookie':self.server.cookie_name+'='+self.server.token+'; HttpOnly; SameSite=Strict; Path=/'});return
             if not self.authorized():self.send({'error':'Open the viewer using START-VIEWER.bat to establish a local session.'},403);return
             a=self.server.archive
-            if url.path=='/api/delete-queue':self.send(self.server.deletions.status());return
+            if url.path=='/api/connection/setup':self.send(self.server.deletions.browser.setup());return
+            if url.path=='/api/delete-queue':self.send(self.server.deletion_status());return
             if url.path=='/api/codex/status':self.send(self.server.native.status());return
             if url.path=='/api/backup/detect':
                 from folder_tools import quick_setup
@@ -1390,8 +1426,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(html.encode('utf-8'),ctype=static_mime(file),headers=headers);return
             self.send(file.read_bytes(),ctype=static_mime(file),headers=headers)
         except Exception as e:self.send({'error':str(e)},400)
+    def do_OPTIONS(self):
+        origin=self.headers.get('Origin','')
+        if self.path.startswith('/api/companion/') and re.fullmatch(r'(chrome|moz)-extension://[a-zA-Z0-9-]+',origin):
+            self.send(b'',204,'text/plain',{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Methods':'POST','Access-Control-Allow-Headers':'Content-Type, X-Viewer-Connection','Access-Control-Max-Age':'600'})
+        else:self.send({'error':'Origin not permitted'},403)
     def do_POST(self):
         try:
+            if self.path.startswith('/api/companion/'):
+                host=self.headers.get('Host','').split(':')[0]
+                origin=self.headers.get('Origin','')
+                valid_origin=not origin or re.fullmatch(r'(chrome|moz)-extension://[a-zA-Z0-9-]+',origin)
+                secret=self.headers.get('X-Viewer-Connection','')
+                if host not in ('127.0.0.1','localhost') or not valid_origin or not secrets.compare_digest(secret,self.server.deletions.browser.secret):
+                    self.send({'error':'Unauthorized browser connection'},403);return
+                length=int(self.headers.get('Content-Length','0'))
+                if not 0<length<=64*1024*1024:raise ValueError('Browser result exceeds 64 MiB')
+                d=json.loads(self.rfile.read(length));operation=self.path.rsplit('/',1)[-1]
+                if operation not in ('poll','permit','result'):raise ValueError('Unknown browser operation')
+                self.send(getattr(self.server.deletions.browser,operation)(d));return
             origin=self.headers.get('Origin')
             if not self.authorized() or (origin and origin not in ('http://127.0.0.1:'+str(self.server.server_port),'http://localhost:'+str(self.server.server_port))):self.send({'error':'Unauthorized local request'},403);return
             length=int(self.headers.get('Content-Length','0'))
@@ -1415,9 +1468,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send({'path':folder});return
             elif self.path=='/api/settings':a.save_settings(d)
             elif self.path=='/api/remote-status/check':self.send(self.server.deletions.check_remote(d.get('id')));return
+            elif self.path=='/api/connection/open-folder':
+                folder=Path(self.server.deletions.browser.setup()['folder'])
+                if os.name=='nt':os.startfile(str(folder))
+                self.send({'path':str(folder)});return
             elif self.path=='/api/connection/reconnect':self.send(self.server.deletions.reconnect());return
-            elif self.path=='/api/delete-queue/add':self.send(self.server.deletions.enqueue(d.get('ids'),d.get('mode','library')));return
-            elif self.path=='/api/delete-queue/action':self.send(self.server.deletions.action(d.get('action'),d.get('ids')));return
+            elif self.path=='/api/delete-queue/add':self.send(self.server.queue_add(d.get('ids'),d.get('mode','library')));return
+            elif self.path=='/api/delete-queue/action':self.send(self.server.queue_action(d.get('action'),d.get('ids')));return
             elif self.path=='/api/delete-queue/install-bridge':
                 import importlib.util
                 spec=importlib.util.spec_from_file_location('viewer_exporter_install',APP/'integration/install-exporter-bridge.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
@@ -1483,6 +1540,6 @@ def main():
     if not args.no_browser:threading.Thread(target=webbrowser.open,args=(url,),daemon=True).start()
     try:server.serve_forever()
     except KeyboardInterrupt:pass
-    finally:server.deletions.close();server.backup.close();a.close();server.server_close()
+    finally:server.native.close();server.deletions.close();server.backup.close();a.close();server.server_close()
 
 if __name__=='__main__':main()

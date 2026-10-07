@@ -28,7 +28,9 @@ async function viewerTick(){
   }
   await viewerQueue.heartbeat({root:queueRoot,job,canEdit,connected,write,connection:state});
   queueRoot=root||folder;
-  if(running||!await viewerQueue.pending(queueRoot,job.scope.key))return;
+  const browserPending=await viewerQueue.transportHeartbeat({job},{root:queueRoot,bridge,write,index});
+  if(running)return;
+  if(!browserPending&&!await viewerQueue.pending(queueRoot,job.scope.key))return;
   running=true;update();
   try{
    const queueBridge=async args=>{try{return await bridge(args);}catch(error){error.connection=true;error.name='Paused';throw error;}};

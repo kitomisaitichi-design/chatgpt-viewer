@@ -91,8 +91,9 @@ viewerAlarm();chrome.runtime.onStartup.addListener(viewerAlarm);chrome.runtime.o
 chrome.alarms.onAlarm.addListener(alarm=>{if(alarm.name==='viewer-queue-wake')void wakeViewerQueue().catch(console.error);});
 """
     manifest=json.loads((folder/'manifest.json').read_text(encoding='utf-8'));manifest['background']['type']='module'
+    manifest['host_permissions']=list(dict.fromkeys(manifest.get('host_permissions',[])+['http://127.0.0.1/*','http://localhost/*']))
     changes={'app.mjs':app,'engine.mjs':engine,'background.js':background,'manifest.json':json.dumps(manifest,indent=2)}
-    for name in ('viewer-delete-adapter.mjs','viewer-runner.mjs','viewer-wake.mjs','viewer-owner.mjs'):changes[name]=(local/name).read_text(encoding='utf-8')
+    for name in ('viewer-delete-adapter.mjs','viewer-runner.mjs','viewer-wake.mjs','viewer-owner.mjs','viewer-transport.mjs'):changes[name]=(local/name).read_text(encoding='utf-8')
     if all((folder/n).exists() and (folder/n).read_text(encoding='utf-8')==v for n,v in changes.items()):return 'Already installed (background queue adapter v2)'
     backup=folder/'viewer-bridge-upgrade-v2.zip'
     if not backup.exists():

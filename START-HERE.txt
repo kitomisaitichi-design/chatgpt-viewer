@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.1.10
+OFFLINE CHAT VIEWER v1.1.17
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
@@ -121,3 +121,13 @@ for a verified retry without rescanning the source. Queue/retry state survives
 restart. Cancel work & retries pauses delivery; Retry saved ZIP delivery resumes.
 Automatic backups can also follow settled exporter manifest updates, using the
 same idle and power choices. Google Drive for desktop handles the cloud sync.
+
+BROWSER CONNECTION AND DELETION
+Connect browser in the bottom status bar opens the private, pre-paired extension
+folder. Load that folder using Edge or Chrome Extensions > Developer mode >
+Load unpacked, then refresh a signed-in ChatGPT tab. No exporter is required.
+If using the optional exporter adapter, reload its extension and dashboard too.
+Select chats, choose retention, then review and Run the deletion queue. Nothing
+is remotely deleted merely by adding a chat. JSON recovery must match ChatGPT.
+Native Codex deletions wait for Codex to close and retain recovery transcripts.
+ChatGPT Projects is separate from Categories and Disk folders.

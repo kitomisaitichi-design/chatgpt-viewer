@@ -4,9 +4,13 @@ from contextlib import closing
 from pathlib import Path
 
 def homes():
-    candidates=[Path(os.environ['CODEX_HOME']).expanduser()] if os.environ.get('CODEX_HOME') else []
-    candidates.append(Path.home()/'.codex')
+    candidates=[configured_home()]
+    if os.environ.get('CODEX_HOME'):candidates.append(Path.home()/'.codex')
     return list(dict.fromkeys(p.resolve() for p in candidates if p.is_dir()))
+
+def configured_home():
+    value=os.environ.get('CODEX_HOME')
+    return (Path(value).expanduser() if value else Path.home()/'.codex').resolve()
 
 def session_header(path):
     with Path(path).open(encoding='utf-8-sig') as stream:
@@ -44,10 +48,14 @@ def reference_path(value):
 class NativeCodex:
     def __init__(self,archive):
         self.archive=archive;self.lock=threading.Lock();self.worker=None
+        self.session_lock=threading.RLock()
         self.state=dict(running=False,found=0,errors=[],roots=[])
+        from native_deletion import NativeDeletionQueue
+        self.deletion_queue=NativeDeletionQueue(archive,session_lock=self.session_lock)
     def status(self):
         with self.lock:return dict(self.state,errors=list(self.state['errors']))
     def start(self):
+        self.deletion_queue.start()
         with self.lock:
             if self.state['running']:return self.status_unlocked()
             self.state=dict(running=True,found=0,errors=[],roots=[str(p) for p in homes()])
@@ -57,6 +65,8 @@ class NativeCodex:
     def discover(self):
         a=self.archive
         try:
+            excluded_value=a.settings().get('nativeCodexExcludedSessions',[])
+            excluded={str(cid) for cid in excluded_value} if isinstance(excluded_value,list) else set()
             for home in homes():
                 titles={}
                 for dbpath in sorted(home.glob('state_*.sqlite'),reverse=True)[:1]:
@@ -74,12 +84,18 @@ class NativeCodex:
                             path=Path(base)/filename
                             if path.suffix!='.jsonl' or path.is_symlink():continue
                             try:
-                                metadata=session_header(path);cid=str(metadata['id']);title=titles.get(cid)
+                                metadata=session_header(path);cid=str(metadata['id'])
+                                if cid in excluded:continue
+                                title=titles.get(cid)
                                 # A state row must point at this exact session before its title is trusted.
                                 if title and Path(title[1]).resolve()==path.resolve():metadata['title']=title[0]
                                 entry=dict(id=cid,title=metadata.get('title') or path.stem,url='',json=str(path.relative_to(root)),chat_kind='codex',create_time=metadata.get('timestamp'),update_time=path.stat().st_mtime)
-                                a.register_manifest(entry,root/'native-codex-index.json',root)
-                                a.publish_sources([a.live_sources[cid]] if cid in a.live_sources else [])
+                                with self.session_lock:
+                                    with a.lock:
+                                        current=a.settings().get('nativeCodexExcludedSessions',[])
+                                        if isinstance(current,list) and cid in {str(value) for value in current}:continue
+                                        a.register_manifest(entry,root/'native-codex-index.json',root)
+                                    a.publish_sources([a.live_sources[cid]] if cid in a.live_sources else [])
                                 with self.lock:self.state['found']+=1
                             except (ValueError,OSError) as error:
                                 with self.lock:
@@ -89,3 +105,6 @@ class NativeCodex:
             with self.lock:self.state['errors'].append(str(error))
         finally:
             with self.lock:self.state['running']=False
+
+    def close(self):
+        self.deletion_queue.close()

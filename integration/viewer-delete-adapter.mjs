@@ -1,3 +1,4 @@
+import {contact as browserContact} from './viewer-transport.mjs';
 // Optional English Autopilot 2.4.12 adapter. Runs inside its existing dashboard lock.
 import {limited,succeeded,validId,conversationValid} from './core.mjs';
 import {recordLimit,recordSuccess} from './awareness.mjs';
@@ -7,7 +8,7 @@ async function directory(root,name,create=false){return root.getDirectoryHandle(
 export async function readQueue(root,path){if(!root)return null;try{let dir=root;const parts=path.split('/');for(const part of parts.slice(0,-1))dir=await directory(dir,part);const file=await (await dir.getFileHandle(parts.at(-1))).getFile();if(file.size>2*1024*1024)throw Error('Viewer queue file is too large');return JSON.parse(await file.text());}catch(e){if(e.name==='NotFoundError')return null;throw e;}}
 export async function heartbeat({root,job,canEdit,connected,write,connection={}}){
  if(!root||!job||!canEdit)return;
- await write('.viewer-queue/bridge.json',JSON.stringify({schema,version:'2.4.12+viewer-2',scope:job.scope.key,updated:Date.now()/1000,connected:!!connected,connection,capabilities:['delete-chat','verify-chat','shared-pacing'],note:'Library cleanup is local only; remote Library deletion is unsupported.'}));
+ await write('.viewer-queue/bridge.json',JSON.stringify({schema,transport:true,version:'2.4.13+viewer-3',scope:job.scope.key,updated:Date.now()/1000,connected:!!connected,connection,capabilities:['delete-chat','verify-chat','shared-pacing'],note:'Library cleanup is local only; remote Library deletion is unsupported.'}));
 }
 async function checks(root,scope){
  try{const dir=await directory(await directory(root,'.viewer-queue'),'checks');let n=0;for await(const h of dir.values()){if(++n>1000)break;if(h.kind!=='file'||!h.name.endsWith('.json'))continue;const c=await readQueue(dir,h.name);if(c?.schema==='offline-viewer/status-v1'&&c.scope===scope&&validId(c.cid)&&/^[a-f0-9]{32}$/.test(c.id)&&Date.now()/1000-c.created<1800){const r=await readQueue(root,'.viewer-queue/check-receipts/'+c.id+'.json');if(!r||r.id!==c.id)return c;}}}catch(e){if(e.name!=='NotFoundError')throw e;}return null;
@@ -33,7 +34,25 @@ async function statusTurn(engine,{root,bridge,write}){
   await write('.viewer-queue/check-receipts/'+c.id+'.json',JSON.stringify({...c,state,verified:valid,checked:Date.now()/1000,detail:!valid?'ChatGPT returned an unrecognized conversation response.':state==='unavailable'?'Authenticated lookup could not access this chat; deletion is not proven.':''}));return true;
  }
 }
+export async function transportHeartbeat(engine,options){return browserContact(engine,{...options,readQueue},false);}
+async function importBrowserReceipts(engine,{root,write,index}){
+ let dir;try{dir=await directory(await directory(root,'.viewer-queue'),'receipts');}catch(e){if(e.name==='NotFoundError')return;throw e;}
+ let count=0,changed=false;
+ for await(const h of dir.values()){
+  if(++count>2000)break;if(h.kind!=='file'||!h.name.endsWith('.json'))continue;
+  const r=await readQueue(dir,h.name),job=engine.job,entry=job.entries[r?.cid];
+  if(r?.schema!==schema||r.scope!==job.scope.key||r.verified!==true||r.state!=='confirmed'||r.remote_state!=='deleted'||!entry||job.viewerDeletes?.[r.cid]?.verified)continue;
+  (job.viewerDeletes||={})[r.cid]={id:r.id,at:r.updated*1000,verified:true,contentHash:entry.contentHash,mode:r.mode};
+  Object.assign(entry,{status:'viewer-deleted',remoteDeletedAt:r.updated*1000,refresh:false,attachmentPending:false,retryAt:0});changed=true;
+  if(r.mode==='library')for(const file of Object.values(job.library?.entries||{})){
+   if(file.conversationIds?.length===1&&file.conversationIds[0]===r.cid)Object.assign(file,{status:'viewer-deleted',viewerDeletedFor:r.cid,parked:true});
+  }
+ }
+ if(changed){await engine.save();await index(engine.job);}
+}
 export async function turn(engine,{root,bridge,write,index}){
+ await importBrowserReceipts(engine,{root,write,index});
+ if(await browserContact(engine,{root,bridge,write,index,readQueue}))return true;
  const send=bridge;bridge=async args=>{try{return await send(args);}catch(error){error.connection=true;error.name='Paused';throw error;}};
  const control=await readQueue(root,'.viewer-queue/control.json');if(!enabled(control))return statusTurn(engine,{root,bridge,write});
  let dir;try{dir=await directory(await directory(root,'.viewer-queue'),'commands');}catch(e){if(e.name==='NotFoundError')return statusTurn(engine,{root,bridge,write});throw e;}
@@ -42,7 +61,7 @@ export async function turn(engine,{root,bridge,write,index}){
   if(++examined>2000)throw Error('Viewer queue exceeds 2000 files; archive completed commands first.');
   if(handle.kind!=='file'||!handle.name.endsWith('.json'))continue;
   const c=await readQueue(dir,handle.name),job=engine.job;
-  if(c?.schema!==schema||c.scope!==job.scope.key||c.run!==control.run||!validId(c.cid)||!/^[a-f0-9]{32}$/.test(c.id)||!['library','preserve'].includes(c.mode))continue;
+  if(c?.executor==='browser-v1'||c?.schema!==schema||c.scope!==job.scope.key||c.run!==control.run||!validId(c.cid)||!/^[a-f0-9]{32}$/.test(c.id)||!['library','preserve'].includes(c.mode))continue;
   const old=await readQueue(root,'.viewer-queue/receipts/'+c.id+'.json');if(old?.run===c.run&&['confirmed','failed','paused'].includes(old.state))continue;
   const receipt=async(state,extra={})=>write('.viewer-queue/receipts/'+c.id+'.json',JSON.stringify({schema,id:c.id,cid:c.cid,scope:c.scope,run:c.run,state,updated:Date.now()/1000,...extra}));
   const active=async()=>{const next=await readQueue(root,'.viewer-queue/control.json');return enabled(next)&&next.run===c.run;};
