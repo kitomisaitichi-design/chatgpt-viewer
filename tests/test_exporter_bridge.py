@@ -38,6 +38,25 @@ class ExporterInterop(unittest.TestCase):
         self.import_archive('wrapped/backup/');self.assertEqual(self.a.catalog()[0]['project'],'Research');self.assertTrue(any(r['available'] for r in FileCatalog(self.a).list()['entries']))
     def test_import_does_not_reverse_manual_unpin_or_rename(self):
         self.import_archive();self.a.organize('export-chat',{'pinned':0,'alias':'My own title'});self.import_archive();chat=self.a.catalog()[0];self.assertEqual(chat['pinned'],0);self.assertEqual(chat['alias'],'My own title')
+    def test_sparse_handoff_does_not_erase_project_during_scan(self):
+        (self.root/'viewer-handoff.json').write_text(json.dumps({'entries':[{**self.entry,'project':''}]}))
+        self.a.scan(self.root,0)
+        self.assertEqual(self.a.catalog()[0]['project'],'Research')
+    def test_cached_project_repair_keeps_content_and_manual_organization(self):
+        self.import_archive();self.a.organize('export-chat',{'pinned':0,'category':'Personal','alias':'Mine'})
+        with self.a.connect() as db:
+            db.execute("UPDATE chats SET project='' WHERE id='export-chat'")
+            before=[tuple(r) for r in db.execute('SELECT * FROM messages')]
+            fingerprint=db.execute('SELECT fingerprint FROM chats').fetchone()[0]
+        self.a.register_manifest({**self.entry,'project':''},self.root/'viewer-handoff.json',self.root)
+        self.a.repair_cached_projects();chat=self.a.catalog()[0]
+        self.assertEqual(chat['project'],'Research');self.assertEqual(chat['category'],'Personal');self.assertEqual(chat['alias'],'Mine');self.assertEqual(chat['pinned'],0)
+        with self.a.connect() as db:
+            self.assertEqual([tuple(r) for r in db.execute('SELECT * FROM messages')],before)
+            self.assertEqual(db.execute('SELECT fingerprint FROM chats').fetchone()[0],fingerprint)
+            db.execute("UPDATE chats SET project='' WHERE id='export-chat'")
+        self.a.register_manifest({**self.entry,'project':'Conflicting'},self.root/'portable-state.json',self.root)
+        self.a.repair_cached_projects();self.assertEqual(self.a.catalog()[0]['project'],'')
     def test_newer_existing_copy_is_kept(self):
         raw={**self.raw,'update_time':30};p=self.root/'json/chat.json';p.write_text(json.dumps(raw));self.a.store(next(self.a.read_items(p)),p,'current',self.root,{})
         p.write_text(json.dumps(self.raw));manager=self.import_archive();self.assertEqual(manager.state()['last_import']['indexed'],0);self.assertEqual(self.a.catalog()[0]['updated'],30)

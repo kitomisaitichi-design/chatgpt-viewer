@@ -12,7 +12,7 @@ window.CatalogModel=(()=>{
    if(read==='read'&&!isRead(c,reads)||read==='unread'&&isRead(c,reads))return false;
    if(untitled&&!/^(?:new chat|untitled(?: conversation)?|chatgpt)?$/i.test(String(title(c)).trim()))return false;
    const time=timestamp(c[field==='created'?'created':'updated']);if((start!==null||end!==null)&&(!time||start!==null&&time<start||end!==null&&time>=end))return false;
-   if(words.length){const text=normalize([title(c),c.title,c.project,c.category].join(' '));if(!words.every(word=>text.includes(word)))return false;}
+   if(words.length){const text=normalize([title(c),c.title,c.project,c.category,c.folder].join(' '));if(!words.every(word=>text.includes(word)))return false;}
    return true;
   });
  }

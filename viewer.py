@@ -9,13 +9,13 @@ from pathlib import Path
 from chat_types import surface_signal, source_surface_hint, source_header, canonical_kind, prefer_signal, free_account
 from source_reader import SourceReader, page_rows, native_conversation
 from thread_images import message_images
-from exporter_bridge import entries as exporter_entries, normalize_entry, attachment_records, inspect_folder,read_metadata
+from exporter_bridge import entries as exporter_entries, normalize_entry, attachment_records, inspect_folder,read_metadata,merge_entry
 
 APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.18'
+VERSION = '1.1.19'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -347,6 +347,7 @@ class Archive:
         self.ui_cache={'chats':{},'settings':self.settings(),'coverage':dict(expected=0,indexed=0,available=0,missing=0,examples=[]),'revision':0,'loading':True}
         def load_existing():
             try:
+                self.repair_cached_projects()
                 chats=self.catalog();coverage=self.coverage()
                 with self.ui_cache_lock:
                     for c in chats:
@@ -357,6 +358,21 @@ class Archive:
                 self.status.setdefault('errors',[]).append('Cached archive read: '+str(e))
                 self.ui_cache['loading']=False
         self.cache_thread=threading.Thread(target=load_existing,daemon=True);self.cache_thread.start()
+    def repair_cached_projects(self):
+        # Repair old sparse-handoff damage from saved metadata, without touching
+        # message indexes, original files, content hashes or local organization.
+        candidates={}
+        with self.connect() as db:
+            for row in db.execute('SELECT cid,metadata FROM manifest_entries'):
+                entry=normalize_entry(json.loads(row['metadata']),row['cid']) or {}
+                name=entry.get('project')
+                if isinstance(name,str) and name:
+                    candidates.setdefault(row['cid'],set()).add(name)
+        with self.lock,self.connect() as db:
+            for cid,names in candidates.items():
+                if self.cache_stop.is_set():break
+                if len(names)==1:db.execute("UPDATE chats SET project=? WHERE id=? AND COALESCE(project,'')=''",(next(iter(names)),cid))
+            if db.total_changes:self.revision+=1
     def repair_cached_types(self):
         # Read saved receipt metadata only, never reparse all conversation bodies.
         signals={}
@@ -781,7 +797,7 @@ class Archive:
                             for e in exporter_entries(d):
                                 if event.is_set():break
                                 if isinstance(e,dict) and e.get('id'):
-                                    self.yield_background();metadata[e['id']]=e;self.register_manifest(e,f,root);self.enrich(e['id'],e)
+                                    self.yield_background();metadata[e['id']]=merge_entry(metadata.get(e['id']),e);self.register_manifest(e,f,root);self.enrich(e['id'],metadata[e['id']])
                         else:
                             items=self.read_items(f);had_items=False;cached_ids={r['id'] for r in cached if r['fingerprint']==fp};reused=False
                             for item in items:

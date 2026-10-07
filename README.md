@@ -1,11 +1,11 @@
-# Offline Chat Viewer · v1.1.18
+# Offline Chat Viewer · v1.1.19
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.18-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.18/Offline-Chat-Viewer-v1.1.18-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.18/Offline-Chat-Viewer-v1.1.18-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.19-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.19/Offline-Chat-Viewer-v1.1.19-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.19/Offline-Chat-Viewer-v1.1.19-Windows.zip.sha256.txt)
 
 ## Quick start
 
@@ -14,13 +14,21 @@ A local ChatGPT-style reader for your Markdown and JSON exports. The standard vi
 3. Choose the complete ChatGPT Exporter backup folder, containing `json`, `markdown` and `attachments`. Saved chats and linked files load locally.
 4. Keep the old application folder until the update is working. Shared preferences migrate across versions; retain `.viewer-data` when updating in place.
 
-[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.18) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
+[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.19) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
 
 ## What the viewer does
 
 Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Normal reading and reversible Trash keep your exports intact. The optional reviewed deletion queue can remove a remote ChatGPT conversation and clean up its verified, unshared local Library copies.
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## Sidebar organization · v1.1.19
+
+The default **Organized view** shows Pinned, Bookmarks, native ChatGPT Projects, My folders & categories, Chats, Work and Codex together. Pins and long lists start with three rows and **Show more**; folders start collapsed so other sections remain reachable. Each chat appears once according to priority, with project/folder context on its row.
+
+Select the small **Organization priorities and nesting** icon beside the sort control. Drag rules, use the up/down buttons, or choose **Inside previous** for up to four levels. Toggle section visibility, empty sections, counts, dates, compact rows, initial list size, collapsed folders and whether pins stay first. **Apply layout** saves across restarts and versions. Per-folder sorting, expansion, manual row order, aliases, filters and reversible Trash remain available. Moving rows between local folders does not change native project membership; row reordering only operates within matching metadata.
+
+Native project names lost to blank duplicate exporter handoffs are restored from unambiguous saved manifest metadata on startup. No archive rescan, message reindex or original-file change is needed. Conflicting names are left unchanged. Source-folder mode uses readable labels such as **ChatGPT archive** and **Codex sessions**, with original paths retained in tooltips; it remains separate from ChatGPT Projects.
 
 ## One native Connect button · v1.1.18
 
@@ -342,6 +350,7 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 
 | Version | Recorded changes |
 | --- | --- |
+| **1.1.19** | Combined sidebar, draggable nested organization priorities, saved display options, readable source labels, and recovery of native project names from sparse handoffs. |
 | **1.1.18** | One native Connect button; app-owned Windows ChatGPT sign-in window with persistent private session; no browser extension or pairing setup; native queue ownership fenced from obsolete exporter adapters. |
 | **1.1.17** | Independent browser connection; exclusive exporter handoff; reviewed deletion queue, revision checks and recovery; deferred native Codex deletion with rediscovery exclusions; native ChatGPT Projects grouping. |
 | **1.1.16** | Exporter heartbeat folder/metadata invariant repair, null-context recovery, corrected optional adapter and release instructions. |

@@ -6,6 +6,13 @@ from pathlib import Path
 
 ALIASES={'createTime':'create_time','created':'create_time','updateTime':'update_time','updated':'update_time','chatKind':'chat_kind','chatKindEvidence':'kind_evidence','chat_kind_evidence':'kind_evidence','jsonPath':'json','markdownPath':'markdown','md':'markdown','conversation_id':'id'}
 
+def merge_entry(previous, incoming):
+    """Sparse handoffs must not erase saved project names or richer references."""
+    previous=previous or {};incoming=incoming or {};merged={**previous,**incoming}
+    for key in ('project','projectId','json','markdown','chat_kind','kind_evidence'):
+        if not incoming.get(key) and previous.get(key):merged[key]=previous[key]
+    return merged
+
 def normalize_entry(value,cid=''):
     if not isinstance(value,dict):return None
     entry=dict(value)
@@ -34,7 +41,7 @@ def entries(data):
         pairs=rows.items() if isinstance(rows,dict) else (('',v) for v in rows) if isinstance(rows,list) else []
         for key,value in pairs:
             entry=normalize_entry(value,key)
-            if entry:merged[entry['id']]={**merged.get(entry['id'],{}),**entry}
+            if entry:merged[entry['id']]=merge_entry(merged.get(entry['id']),entry)
     return list(merged.values())
 
 META_LIMIT=128*1024**2
@@ -71,7 +78,7 @@ def metadata_sources(root,documents):
     indexes=sorted((p for p in documents if p.name.lower() in ('viewer-handoff.json','conversation-index.json') or 'portable-state' in p.name.lower()),key=lambda p:(p.name.lower()=='conversation-index.json',p.name.lower()!='viewer-handoff.json',str(p)))
     for manifest in indexes:
         for entry in read_index(manifest):
-            entry={**by_id.get(entry['id'],{}),**entry};by_id[entry['id']]=entry
+            entry=merge_entry(by_id.get(entry['id']),entry);by_id[entry['id']]=entry
             manifests.append((entry,manifest))
             for key in ('json','markdown'):
                 path=saved_path(manifest.parent,entry.get(key))
