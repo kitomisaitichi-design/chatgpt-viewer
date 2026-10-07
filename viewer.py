@@ -15,14 +15,14 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.11'
+VERSION = '1.1.12'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
 ROLE = re.compile(r'^## (You|User|Assistant|ChatGPT|Tool|System)(?: \(([^)]+)\))?\s*$')
 MODEL = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
 STATIC_MIME = {'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8',
- '.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json',
+ '.wasm':'application/wasm','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json',
  '.woff2':'font/woff2','.woff':'font/woff','.ttf':'font/ttf','.svg':'image/svg+xml',
  '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.ico':'image/x-icon'}
 
@@ -1162,6 +1162,8 @@ class Server(ThreadingHTTPServer):
         self.files=FileCatalog(archive)
         from thread_images import ThreadImages
         self.images=ThreadImages(archive,self.files)
+        from thread_attachments import ThreadAttachments
+        self.attachments=ThreadAttachments(archive,self.files)
     def transfer_status(self):
         with self.transfer_lock:
             active=[dict(r,elapsed_ms=round((time.monotonic()-r['started'])*1000)) for r in self.transfers.values()]
@@ -1240,6 +1242,19 @@ class Handler(BaseHTTPRequestHandler):
             if url.path=='/api/thread-images/content':
                 with a.foreground_read():f=self.server.images.file(q['id'],q['image'],q.get('leaf'))
                 self.stream_file(f,True);return
+            if url.path=='/api/thread-attachments':
+                with a.foreground_read():self.send(self.server.attachments.public(q['id'],q.get('leaf')))
+                return
+            if url.path=='/api/thread-attachments/content':
+                with a.foreground_read():f=(self.server.attachments.original if q.get('original')=='1' else self.server.attachments.file)(q['id'],q['attachment'],q.get('leaf'))
+                self.stream_file(f,False);return
+            if url.path=='/api/thread-attachments/relative':
+                with a.foreground_read():f=self.server.attachments.relative(q['id'],q['attachment'],q['path'],q.get('leaf'))
+                self.stream_file(f,True);return
+            if url.path=='/api/thread-markdown':
+                from thread_attachments import thread_markdown
+                with a.foreground_read():text,mode=thread_markdown(a,q['id'],q.get('leaf'))
+                self.send(text.encode('utf-8'),ctype='text/plain; charset=utf-8',headers={'X-Markdown-Source':mode});return
             if url.path=='/api/files':
                 self.send(self.server.files.list(q.get('search',''),q.get('status','all'),q.get('conversation',''),q.get('offset',0),q.get('limit',50),q.get('source','all')));return
             if url.path=='/api/files/content':
@@ -1316,7 +1331,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.stream_file(f,inline);return
             file=APP/'web'/('index.html' if url.path=='/' else url.path.lstrip('/'))
             if not file.resolve().is_relative_to((APP/'web').resolve()) or not file.is_file():self.send({'error':'Not found'},404);return
-            self.send(file.read_bytes(),ctype=static_mime(file),headers={'Cache-Control':'private, max-age=86400'} if file.resolve().is_relative_to((APP/'web'/'vendor').resolve()) else None)
+            headers={'Cache-Control':'private, max-age=86400'} if file.resolve().is_relative_to((APP/'web'/'vendor').resolve()) else {}
+            if file.name=='attachment-frame.html':
+                # Opaque sandbox subresources cannot send the Strict session
+                # cookie. Inline only our pinned scripts with a fresh nonce;
+                # keep document bytes isolated from the parent and network.
+                nonce=secrets.token_urlsafe(24)
+                html=file.read_text(encoding='utf-8')
+                html=re.sub(r'<meta http-equiv="Content-Security-Policy"[^>]*>','',html)
+                def bundle(match):
+                    script=(APP/'web'/match[1]).read_text(encoding='utf-8').replace('</script','<\\/script')
+                    return '<script nonce="'+nonce+'">'+script+'</script>'
+                html=re.sub(r'<script defer src="([^"\n]+)"></script>',bundle,html)
+                headers['Content-Security-Policy']="default-src 'none'; sandbox allow-scripts; script-src 'nonce-"+nonce+"'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; connect-src 'none'; frame-src 'none'; form-action 'none'; frame-ancestors 'self'; base-uri 'none'"
+                self.send(html.encode('utf-8'),ctype=static_mime(file),headers=headers);return
+            self.send(file.read_bytes(),ctype=static_mime(file),headers=headers)
         except Exception as e:self.send({'error':str(e)},400)
     def do_POST(self):
         try:

@@ -22,6 +22,8 @@ jobs:
           git remote add origin "https://github.com/$REPOSITORY.git"
           git fetch --depth=1 origin "$COMMIT"
           git checkout --detach FETCH_HEAD
+      - name: Prepare pinned offline document renderers
+        run: python3 scripts/vendor-documents.py
       - name: Run backend tests
         run: |
           python3 --version
@@ -33,6 +35,7 @@ jobs:
           node tests/check_rendering.js
           node tests/check_catalog.js
           node tests/check_thread_images.js
+          node tests/check_attachments.js
       - name: Build and publish ZIP and checksum
         env:
           GH_TOKEN: ${{ github.token }}

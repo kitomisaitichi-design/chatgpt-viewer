@@ -1,11 +1,16 @@
 """Build a portable release from tracked runtime/source files; exclude user data."""
-import hashlib,re,subprocess,sys,zipfile
+import hashlib,json,re,subprocess,sys,zipfile
 from pathlib import Path
 root=Path(__file__).resolve().parents[1];version=re.search(r"VERSION = '([^']+)'",(root/'viewer.py').read_text()).group(1)
 out=Path(sys.argv[1]).resolve() if len(sys.argv)>1 else root/'dist';out.mkdir(parents=True,exist_ok=True)
 paths=subprocess.check_output(['git','ls-files','-z'],cwd=root).decode().split('\0')
 # Newly authored source files can be packaged before the local release commit.
 paths+=subprocess.check_output(['git','ls-files','--others','--exclude-standard','-z'],cwd=root).decode().split('\0')
+vendors=json.loads((root/'web/vendor/documents/manifest.json').read_text())
+for name,digest in vendors['files'].items():
+ relative='web/vendor/documents/'+name
+ if hashlib.sha256((root/relative).read_bytes()).hexdigest()!=digest:raise ValueError('Missing/changed offline renderer: '+name)
+ paths.append(relative)
 paths=sorted({p for p in paths if p and p!='.gitignore' and not p.startswith(('.github/','tests/','scripts/','release-notes/'))})
 name=f'Offline-Chat-Viewer-v{version}-Windows.zip';target=out/name
 for required in ['viewer.py','thread_images.py','web/thread-images.js','web/document-cards.js','web/media.css','library_files.py','START-VIEWER.bat','runtime/python.exe','runtime/python313.zip','web/files.js','web/files.css']:

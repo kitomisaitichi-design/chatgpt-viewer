@@ -5,3 +5,5 @@ __pycache__/
 Backups/
 dist/
 VIEWER-DIAGNOSTICS.json
+web/vendor/documents/**
+!web/vendor/documents/manifest.json

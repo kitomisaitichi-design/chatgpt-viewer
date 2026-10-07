@@ -1,17 +1,29 @@
-# Offline Chat Viewer · v1.1.11
+# Offline Chat Viewer · v1.1.12
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.11-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.11/Offline-Chat-Viewer-v1.1.11-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.11/Offline-Chat-Viewer-v1.1.11-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.12-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.12/Offline-Chat-Viewer-v1.1.12-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.12/Offline-Chat-Viewer-v1.1.12-Windows.zip.sha256.txt)
 
 ## What the viewer does
 
 Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Your exports remain untouched.
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## Linked attachment previews and controls · v1.1.12
+
+- Image navigation uses full-height 64 px translucent side strips with centered SVG chevrons on hover/focus. Unavailable directions hide; arrow keys, fitted swipe, wheel zoom and zoomed panning remain available.
+- A consistent SVG thread toolbar adds a light-bulb light/dark toggle, a separate theme palette and navy **Midnight**. The previous dark theme, chosen theme and attachment-pane width are retained in the existing shared cross-version preferences.
+- **Copy text** copies the complete explicitly linked original Markdown, independently of loaded message pages. With JSON-only exports or an alternate saved branch, it generates Markdown from that branch and identifies the fallback. Conflicting Markdown originals are not guessed.
+- Compact prompt-linked document cards show filename, type, size and availability. Open a card, the thread Files button or an associated Library document in a resizable right pane. Expand, close, **Go to prompt**, chronological previous/next, search and zoom remain inside the viewer. Narrow windows use a full-width pane. There is no additional download button; **Open original** uses the existing original-file route.
+- Markdown preview/raw views reuse the existing LaTeX and table renderer. Text/code is selectable. PDF pages render on demand with selectable text and cross-page search. Word DOCX displays tables and embedded images. Excel XLSX/XLS and CSV/TSV offer worksheet selection and 200-row pages. Previews are read-only; Office layout is approximate and spreadsheet previews show saved values, without recalculating formulas or preserving every workbook formatting feature.
+- PDF.js 6.4.299, docx-preview 0.4.1, JSZip 3.10.2 and SheetJS CE 0.20.3 are bundled in portable releases and lazy-loaded locally. Source builds run `python scripts/vendor-documents.py` to download pinned, SHA-256-verified upstream assets. No runtime CDN is required. PDF/Word preserve original page colors; the surrounding controls follow the selected theme.
+- Attachment APIs reuse the image resolver, source/branch revisions, cached Library and root checks. Explicit IDs/paths win; ambiguous filenames are not assigned to prompts. Unpositioned Library files appear last and are labelled. Markdown images require thread provenance or the document's own `_files`/`.assets` directory; a shared export directory alone does not establish ownership.
+- Only opened documents load bytes. Preview bytes retain at most two files / 64 MiB; metadata retains eight catalogs. Navigation aborts stale fetches, releases PDF and spreadsheet workers, removes Word frames and guards worksheet/page completions. Opening previews does not request archive rescans or sidebar rebuilds.
+- Limits: 64 MiB per preview, 256 MiB expanded Office ZIP data, 20,000 ZIP members, first 1 MiB of text displayed, and up to 20,000 rows / 100 columns per worksheet. Unsupported, missing, encrypted or damaged files explain the problem and retain original-file access where locally available. Document scripts, macros, external relationships and external resource loading are disabled; Word renders in an opaque sandbox with nonce-authorized bundled scripts.
 
 ## Reliable images during active exports · v1.1.11
 

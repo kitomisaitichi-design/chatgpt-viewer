@@ -10,6 +10,7 @@ window.ExportInterop=(()=>{
    $('use-export-root').hidden=data.root===path;$('use-export-root').title=data.root;
   }catch(error){if(id===checkId){$('export-inspection-title').textContent='Folder needs attention';$('export-inspection-detail').textContent=error.message;}}
  }
+ function getPreviewPane(file){$('saved-files-dialog').close();ThreadAttachments.open(fileCid,file.id||file.relative,null,S.leaf);}
  function assetURL(file){return '/api/asset?'+new URLSearchParams({id:fileCid,path:file.relative});}
  function renderFiles(){const query=$('saved-files-query').value.trim().toLowerCase(),box=$('saved-files-list');box.replaceChildren();
   for(const file of files.filter(f=>(f.name+' '+f.relative).toLowerCase().includes(query))){const row=el('section','saved-file-row'),detail=el('div','saved-file-label');detail.append(el('strong','',file.name),el('span','muted',file.available?size(file.size)+' · Saved locally':'Not downloaded · '+file.status));row.append(detail);
@@ -17,7 +18,7 @@ window.ExportInterop=(()=>{
   }
   if(!box.children.length)box.append(el('p','muted',files.length?'No files match your search.':'No attachment records were included in this export. Linked files remain available inside the conversation.'));
  }
- async function showPreview(file){const id=++previewId,box=$('saved-file-preview');box.hidden=false;box.replaceChildren(el('strong','',file.name));
+ async function showPreview(file){if(!/\.(?:png|jpe?g|gif|webp|avif|bmp)$/i.test(file.name)){getPreviewPane(file);return;}const id=++previewId,box=$('saved-file-preview');box.hidden=false;box.replaceChildren(el('strong','',file.name));
   if(/\.(?:png|jpe?g|gif|webp|avif|bmp)$/i.test(file.name)){const img=el('img');img.alt=file.name;img.loading='lazy';img.src=assetURL(file);img.onerror=()=>box.append(el('p','muted','The saved image could not be displayed.'));box.append(img);return;}
   const pre=el('pre','','Loading preview…');box.append(pre);
   try{const result=await api('/api/file-preview?'+new URLSearchParams({id:fileCid,path:file.relative}));if(id!==previewId)return;pre.textContent=result.text;if(result.truncated)box.append(el('p','muted','First 32 KB shown. Download for the complete file.'));}catch(error){if(id===previewId)pre.textContent=error.message;}

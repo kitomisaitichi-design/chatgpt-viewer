@@ -38,6 +38,10 @@ def raster_type(path):
     raise ValueError('This saved file is not a supported raster image. Download it from Files & Library to inspect it.')
 
 class ThreadImages:
+    extensions=IMAGE_EXT
+    references=staticmethod(message_images)
+    markdown_pattern=MARKDOWN_IMAGE
+    raster_only=True
     def __init__(self,archive,files):
         self.archive=archive;self.files=files;self.lock=threading.RLock();self.cache=OrderedDict();self.builds=0
     def catalog(self,cid,leaf=None):
@@ -53,11 +57,12 @@ class ThreadImages:
             rows=a.source_reader.rows(cid,path,leaf);raw=entry['raw'] or {};mapping=raw.get('mapping') or {};messages=raw.get('messages') or [];items=[];by_target={}
             aliases={}
             for f in files:
-                if Path(f['relative'] or f['name']).suffix.lower() not in IMAGE_EXT:continue
+                if self.extensions is not None and Path(f['relative'] or f['name']).suffix.lower() not in self.extensions:continue
                 for alias in {f['id'],f['name'],f['relative'],Path(f['relative'] or f['name']).name}:
                     if alias:aliases.setdefault(str(alias),[]).append(f)
             def add(ref,name,seq,node_id='',file=None):
                 ref=urllib.parse.unquote(str(ref)).strip('<>');target=None
+                if not self.raster_only and re.match(r'^(?:https?:|data:|javascript:|#|//)',ref,re.I):return
                 if not file:
                     opaque=re.sub(r'^(?:sediment|file-service)://','',ref)
                     candidates=aliases.get(ref) or aliases.get(opaque) or aliases.get(opaque.rsplit('/',1)[-1]) or []
@@ -66,7 +71,7 @@ class ThreadImages:
                 elif not re.match(r'^(?:[a-z][\w+.-]*:|//)',ref,re.I):
                     try:target=a.asset(cid,ref,indexed=False)
                     except (ValueError,OSError):pass
-                if target and target.suffix.lower() not in IMAGE_EXT:return
+                if target and self.extensions is not None and target.suffix.lower() not in self.extensions:return
                 identity=str(target) if target else ref
                 if identity in by_target:
                     item=by_target[identity]
@@ -79,13 +84,14 @@ class ThreadImages:
             for row in rows:
                 if not row['visible']:continue
                 node_id=(row.get('extras') or {}).get('node_id','');message=(mapping.get(node_id) or {}).get('message') or (messages[row['seq']] if row['seq']<len(messages) else {})
-                for ref,name in (row.get('extras') or {}).get('image_refs',message_images(message)):add(ref,name,row['seq'],node_id)
+                refs=(row.get('extras') or {}).get('image_refs',self.references(message)) if self.raster_only else self.references(message)
+                for ref,name in refs:add(ref,name,row['seq'],node_id)
                 text=CODE_SPANS.sub('',row['text'])
-                for m in MARKDOWN_IMAGE.finditer(text):add(m[2],m[1],row['seq'],node_id)
+                for m in self.markdown_pattern.finditer(text):add(m[2],m[1],row['seq'],node_id)
                 for m in HTML_IMAGE.finditer(text):add(m[2],Path(m[2]).name,row['seq'],node_id)
             # Library entries without a prompt reference are explicitly placed last.
             for f in files:
-                if Path(f['relative'] or f['name']).suffix.lower() in IMAGE_EXT:add(f['id'],f['name'],None,file=f)
+                if self.extensions is None or Path(f['relative'] or f['name']).suffix.lower() in self.extensions:add(f['id'],f['name'],None,file=f)
             result=dict(images=items,last_seq=rows.visible[-1]['seq'] if rows.visible else None,revision=hashlib.sha256(repr(key).encode()).hexdigest()[:20]);self.builds+=1;self.cache[key]=result
             while len(self.cache)>8:self.cache.popitem(last=False)
             return result
@@ -112,4 +118,5 @@ class ThreadImages:
             path=self.files.available_path(dict(target=item['target'],root=item['root'],size=item['expected']))
             if not path:raise FileNotFoundError('This image has not been completely saved locally yet. Retry after the exporter finishes downloading it.')
         else:path=self.archive.asset(cid,item['path'],indexed=False)
-        raster_type(path);return path
+        if self.raster_only:raster_type(path)
+        return path
