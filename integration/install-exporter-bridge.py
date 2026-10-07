@@ -4,7 +4,7 @@ from pathlib import Path
 
 def install(folder):
     folder=Path(folder).expanduser().resolve()
-    if json.loads((folder/'manifest.json').read_text(encoding='utf-8'))['version']!='2.4.12':raise ValueError('This bridge supports exporter 2.4.12 only; keep newer exporter files intact.')
+    if json.loads((folder/'manifest.json').read_text(encoding='utf-8'))['version'] not in ('2.4.12','2.4.13'):raise ValueError('This bridge supports exporter 2.4.12 and 2.4.13 only; keep newer exporter files intact.')
     names=('app.mjs','engine.mjs','bridge.js','core.mjs');source={name:(folder/name).read_text(encoding='utf-8') for name in names}
     if 'viewer-delete-adapter.mjs' in source['app.mjs']:return upgrade(folder)
     changes={}
@@ -74,6 +74,8 @@ def upgrade(folder):
         target="navigator.locks.request('english-exporter-dashboard',{ifAvailable:true},async lock=>{if(!lock){canEdit=false;update();$('message').textContent='Another exporter tab is already open. Continue there, or close it and reload this tab.';return;}await init();await new Promise(()=>{});}).catch(error);"
         if app.count(target)!=1:raise ValueError('Exporter ownership contract differs; no v2 files were changed')
         app="import {own as ownViewerQueue} from './viewer-owner.mjs';\n"+app.replace(target,"ownViewerQueue({locks:navigator.locks,ready:async()=>{canEdit=true;await init();},blocked:()=>{canEdit=false;update();$('message').textContent='Another exporter page owns this account. This page will take over when it closes.';},error});")
+    # A queue heartbeat is not evidence that folder metadata was resolved.
+    app=app.replace('if(root)return;localSummary=', 'if(root&&rootDetection)return;localSummary=')
     app+= (local/'viewer-dashboard.js').read_text(encoding='utf-8')
     engine=(folder/'engine.mjs').read_text(encoding='utf-8')
     if 'ViewerQueuePaused' not in engine:

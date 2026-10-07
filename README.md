@@ -1,17 +1,40 @@
-# Offline Chat Viewer · v1.1.15
+# Offline Chat Viewer · v1.1.16
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.15-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.15/Offline-Chat-Viewer-v1.1.15-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.15/Offline-Chat-Viewer-v1.1.15-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.16-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.16/Offline-Chat-Viewer-v1.1.16-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.16/Offline-Chat-Viewer-v1.1.16-Windows.zip.sha256.txt)
+
+## Quick start
+
+1. Download the Windows ZIP above and extract it to a writable folder.
+2. Open **START-VIEWER.bat**. Python and offline rendering libraries are included.
+3. Choose the complete ChatGPT Exporter backup folder, containing `json`, `markdown` and `attachments`. Saved chats and linked files load locally.
+4. Keep the old application folder until the update is working. Shared preferences migrate across versions; retain `.viewer-data` when updating in place.
+
+[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.16) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
 
 ## What the viewer does
 
 Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Normal reading and reversible Trash keep your exports intact. The optional reviewed deletion queue can remove a remote ChatGPT conversation and clean up its verified, unshared local Library copies.
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## Latest repair · v1.1.16
+
+The optional exporter bridge no longer marks a folder ready before its metadata exists. This fixes **Cannot read properties of null (reading 'metadata')** on **Resume backup**. The installer also repairs an old root-without-metadata state and supports **Exporter 2.4.12 and 2.4.13**. Update/reinstall the bridge from the queue setup and refresh the exporter dashboard. Existing exports, hashes, queue progress and preferences are preserved; no queue reset is needed.
+
+| Capability | What you can do |
+| --- | --- |
+| Read and preview | Markdown, saved branches, LaTeX, tables, charts, code, images, PDF, Word and spreadsheets; read-only linked attachment pane. |
+| Organize and search | Independent type filters and ordering, projects/folders, pins, bookmarks, aliases, colours, reversible Trash, text search. |
+| Back up and mirror | Select JSON, Markdown, images and other files; linked indexes and SHA-256; full/progress ZIP slots, asynchronous capture/queue and Drive for desktop delivery. Google Drive performs the cloud sync. |
+| Connect and queue | Green connection dot, initial attempt plus two retries then manual Reconnect; optional reviewed ChatGPT deletion through one shared exporter scheduler. |
+| Keep local history | Native Codex sessions load asynchronously. Verified deleted/unavailable ChatGPT chats keep distinct local-copy labels and remain readable. |
+
+Remote actions need the optional exporter bridge and a signed-in browser. Remote Library deletion is unsupported. **Live authenticated resume, background wake and deletion remain unverified.** The folder/resume repair is exercised with actual application functions and simulated services.
 
 ## First connection setup · v1.1.15
 
@@ -31,7 +54,7 @@ Verification: 255 backend tests (one local Windows symlink skip), five JavaScrip
 
 - Trash rows have independent selection and delete/restore icons. Selection survives filtering; **Queue delete** opens mutually exclusive local retention options. The default cleans up unshared local Library copies after verified remote deletion; **Preserve local copy** keeps local files. Original chat JSON/Markdown and recovery backups are retained in either mode.
 - Adding jobs never executes them. Review the exact pending set, then **Run**. A durable SQLite queue deduplicates by exporter account and conversation ID, snapshots linked Markdown/source/available attachments before remote work, and supports pause/stop, per-chat progress, checkmarks and restrained animation. Manual scrolling disables automatic progress following. Refresh retains jobs; restarting the viewer pauses unfinished work.
-- Remote execution requires the optional, narrowly versioned **ChatGPT Exporter 2.4.12** adapter. In the queue's **Connect exporter bridge**, choose the unpacked extension folder and install. Reload the extension and its ChatGPT tab, open its dashboard and reconnect the same export folder. Installation backs up all four modified exporter files in `viewer-bridge-rollback.zip`; restore those files and remove `viewer-delete-adapter.mjs` to undo it. Other exporter versions are refused without modifications.
+- Remote execution requires the optional, narrowly versioned **ChatGPT Exporter 2.4.12/2.4.13** adapter. In the queue's **Connect exporter bridge**, choose the unpacked extension folder and install. Reload the extension and its ChatGPT tab, open its dashboard and reconnect the same export folder. Installation backs up all four modified exporter files in `viewer-bridge-rollback.zip`; restore those files and remove `viewer-delete-adapter.mjs` to undo it. Other exporter versions are refused without modifications.
 - The adapter enters the exporter's existing exclusive dashboard lock and Engine scheduler. It serializes requests, shares adaptive pacing/Retry-After and account scope, verifies the saved revision again before mutation, and verifies the remote result before acknowledging completion. Disconnected jobs remain queued. Expiring viewer control leases prevent old commands from running after a crash or unavailable folder. Verified deletion tombstones are separate from content hashes and survive exporter resume/index import. No competing HTTP executor runs in the viewer.
 - **Remote ChatGPT Library deletion is unsupported.** The retention choice concerns local Library files. Shared files remain; removed unshared files also have same-volume recovery and SHA-256-checked backups under `.viewer-queue/recovery` and the viewer data directory's `deletion-recovery`. Recovery material is private and excluded from application releases. Authenticated remote deletion has not been exercised against a real account; contract tests simulate HTTP while using the actual exporter gate/pacing.
 - A separate searchable **Bookmarks** panel opens from the sidebar or thread toolbar, with open/unbookmark and a current-chat toggle. Pins keep their existing ordering behavior. Bookmark/type metadata participates in shared cross-version preferences and settings backup/restore.
