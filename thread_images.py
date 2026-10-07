@@ -54,7 +54,7 @@ class ThreadImages:
             aliases={}
             for f in files:
                 if Path(f['relative'] or f['name']).suffix.lower() not in IMAGE_EXT:continue
-                for alias in (f['id'],f['name'],f['relative'],Path(f['relative'] or f['name']).name):
+                for alias in {f['id'],f['name'],f['relative'],Path(f['relative'] or f['name']).name}:
                     if alias:aliases.setdefault(str(alias),[]).append(f)
             def add(ref,name,seq,node_id='',file=None):
                 ref=urllib.parse.unquote(str(ref)).strip('<>');target=None
@@ -74,7 +74,7 @@ class ThreadImages:
                     if ref not in item['references']:item['references'].append(ref)
                     return
                 ident=hashlib.sha256((cid+'\0'+identity).encode()).hexdigest()[:24]
-                item=dict(id=ident,name=(file['name'] if file else name or Path(ref).name),seq=seq,node_id=node_id,sequences=[] if seq is None else [seq],references=[ref],file_key=file['key'] if file else None,path=ref if not file else None,target=target,expected=file.get('size') if file else None,source='Library' if file and 'library' in file['sources'] else 'Chat')
+                item=dict(id=ident,name=(file['name'] if file else name or Path(ref).name),seq=seq,node_id=node_id,sequences=[] if seq is None else [seq],references=[ref],file_key=file['key'] if file else None,path=ref if not file else None,target=target,root=file['root'] if file else None,expected=file.get('size') if file else None,source='Library' if file and 'library' in file['sources'] else 'Chat')
                 items.append(item);by_target[identity]=item
             for row in rows:
                 if not row['visible']:continue
@@ -96,13 +96,20 @@ class ThreadImages:
             if target is None and item['path']:
                 try:target=self.archive.asset(cid,item['path'],indexed=False)
                 except (ValueError,OSError):pass
-            try:available=bool(target and target.is_file() and (item['expected'] is None or target.stat().st_size==item['expected']))
+            try:available=bool(self.files.available_path(dict(target=target,root=item['root'],size=item['expected']))) if item['root'] else bool(target and target.is_file() and (item['expected'] is None or target.stat().st_size==item['expected']))
             except OSError:available=False
-            images.append({k:v for k,v in item.items() if k not in ('target','expected')} | {'available':available})
+            images.append({k:v for k,v in item.items() if k not in ('target','expected','root')} | {'available':available})
         return dict(images=images,last_seq=catalog['last_seq'],revision=catalog['revision'])
     def file(self,cid,image_id,leaf=None):
-        item=next((i for i in self.catalog(cid,leaf)['images'] if i['id']==image_id),None)
+        # A thumbnail URL names an already-authorized occurrence. Reuse that
+        # bounded snapshot while checking just its bytes/path; exporter writes
+        # must not trigger two complete Library rebuilds for every thumbnail.
+        with self.lock:
+            item=next((i for (source,branch,_),catalog in reversed(self.cache.items()) if source[-1]==cid and branch==leaf for i in catalog['images'] if i['id']==image_id),None)
+        if not item:item=next((i for i in self.catalog(cid,leaf)['images'] if i['id']==image_id),None)
         if not item:raise FileNotFoundError('This image has not been saved locally yet.')
-        if item['file_key']:path,_=self.files.file(item['file_key'])
+        if item['file_key']:
+            path=self.files.available_path(dict(target=item['target'],root=item['root'],size=item['expected']))
+            if not path:raise FileNotFoundError('This image has not been completely saved locally yet. Retry after the exporter finishes downloading it.')
         else:path=self.archive.asset(cid,item['path'],indexed=False)
         raster_type(path);return path

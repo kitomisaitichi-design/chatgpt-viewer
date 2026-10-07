@@ -1,5 +1,6 @@
 import http.client,json,tempfile,threading,unittest
 from pathlib import Path
+from unittest.mock import patch
 from viewer import Archive,Server
 from library_files import FileCatalog
 from thread_images import ThreadImages,raster_type,message_images
@@ -42,6 +43,14 @@ class ThreadImageTests(unittest.TestCase):
   self.save();old=self.images.public(self.cid);self.image();(self.root/'attachments/library-index.json').write_text(json.dumps({'schema':'chatgpt-library-index/v1','entries':[dict(id='new',name='one.png',path='attachments/one.png',conversation_ids=[self.cid])]}));new=self.images.public(self.cid);self.assertNotEqual(old['revision'],new['revision']);self.assertEqual(len(new['images']),1)
  def test_metadata_does_not_extract_citation_icons_or_non_images(self):
   self.assertEqual(message_images(dict(content=dict(parts=['text']),metadata=dict(content_references=[dict(favicon_path='icons/x.png')],attachments=[dict(id='pdf',name='file.pdf')]))),[])
+ def test_image_delivery_reuses_catalog_without_refreshing_all_manifests(self):
+  p=self.image();index=self.root/'attachments/library-index.json';index.write_text(json.dumps({'schema':'chatgpt-library-index/v1','entries':[dict(id='file-one',name='one.png',path='attachments/one.png',size=len(PNG),conversation_ids=[self.cid])]}));self.data['mapping']['n4']['message']['content']['parts']=[dict(content_type='image_asset_pointer',asset_pointer='sediment://file-one')];self.save();item=self.images.public(self.cid)['images'][0]
+  with patch.object(self.files,'refresh',side_effect=AssertionError('Image delivery rebuilt the complete Library')):
+   self.assertEqual(self.images.file(self.cid,item['id']),p)
+   p.write_bytes(PNG+b'incomplete')
+   with self.assertRaises(FileNotFoundError):self.images.file(self.cid,item['id'])
+ def test_filename_alias_does_not_duplicate_its_own_candidate(self):
+  self.image();index=self.root/'attachments/library-index.json';index.write_text(json.dumps({'schema':'chatgpt-library-index/v1','entries':[dict(id='file-one',name='one.png',path='attachments/one.png',conversation_ids=[self.cid])]}));self.data['mapping']['n4']['message']['metadata']['attachments']=[dict(name='one.png',id='one.png',mime_type='image/png')];self.save();items=self.images.public(self.cid)['images'];self.assertEqual(len(items),1);self.assertEqual(items[0]['seq'],4);self.assertTrue(items[0]['available'])
  def test_http_gallery_session_and_validated_image_content(self):
   self.image();self.data['mapping']['n0']['message']['content']['parts']=['![one](attachments/one.png)'];self.save();server=Server(('127.0.0.1',0),self.a);t=threading.Thread(target=server.serve_forever,daemon=True);t.start();c=http.client.HTTPConnection('127.0.0.1',server.server_port)
   try:

@@ -1,17 +1,25 @@
-# Offline Chat Viewer · v1.1.10
+# Offline Chat Viewer · v1.1.11
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.10-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.10/Offline-Chat-Viewer-v1.1.10-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.10/Offline-Chat-Viewer-v1.1.10-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.11-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.11/Offline-Chat-Viewer-v1.1.11-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.11/Offline-Chat-Viewer-v1.1.11-Windows.zip.sha256.txt)
 
 ## What the viewer does
 
 Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Your exports remain untouched.
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## Reliable images during active exports · v1.1.11
+
+- Repairs a real large-archive failure where the image catalog exceeded the 15-second request timeout even though the JPEG was already saved. Catalog construction now joins validated relative paths without resolving every missing attachment on disk; source-reference deduplication avoids repeated JSON serialization.
+- Thumbnail and enlarged-image delivery reuse the bounded thread catalog snapshot instead of rebuilding the complete Library twice per image. Each delivered file still gets fresh root, symlink, size and raster-signature checks. Updated catalogs continue to follow source, branch and manifest revisions; new downloads can appear without reindexing chats.
+- Fixes filename aliases matching the same catalog item twice and producing a false missing-image entry. Genuine ambiguous filenames remain unresolved rather than selecting an unrelated image.
+- Gives cold image catalog requests the same 60-second allowance as long-chat reads. Failed requests show their actual error beside Retry; retries coalesce, and stale failures cannot alter a different chat.
+- Verified the reported personal chat locally: all eight images in its affected message decoded, including IMG_0058.jpeg at 1152×1536, with enlarged viewing, wheel zoom, fitted swipe, navigation and refresh. Private files and screenshots are excluded from the portable release.
 
 ## Documents and thread images · v1.1.10
 
@@ -255,6 +263,7 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 
 | Version | Recorded changes |
 | --- | --- |
+| **1.1.11** | Large-archive image timeout repair; metadata-only catalog paths; snapshot-based validated thumbnail delivery; filename alias deduplication; visible retry errors and stale-failure guards; actual saved-image browser verification. |
 | **1.1.10** | Titled writing/document cards with original-body copy and expansion; preserved LaTeX/citations; lazy native and Library images; cached whole-thread gallery with wheel zoom, swipe, pan, keyboard navigation, original-prompt jumps, reduced motion and missing-file recovery. |
 | **1.1.9** | Resumable verified per-file captures decouple active exports from ZIP packaging; changing files retry automatically without losing stable work; pending capture survives restart; waiting/retry feedback; unchanged capture and two-slot ZIP reuse. |
 | **1.1.8** | Exporter 2.4.10 nested-root and Library-only compatibility; persistent coalesced backup queue; complete local ZIPs before Drive delivery; verified retry without rescanning, exponential backoff and cancellation; quiet exporter-update detection; visible queue/retry controls and guarded double submission. |

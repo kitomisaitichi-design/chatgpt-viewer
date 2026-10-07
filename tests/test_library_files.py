@@ -1,5 +1,6 @@
 import http.client,json,tempfile,threading,unittest
 from pathlib import Path
+from unittest.mock import patch
 from viewer import Archive,Server
 from library_files import FileCatalog,safe_relative
 
@@ -26,6 +27,16 @@ class FileCatalogTests(unittest.TestCase):
   with self.assertRaises(FileNotFoundError):self.catalog.file(r['key'])
  def test_duplicate_ids_keep_saved_attachment_and_combine_source_chats(self):
   target=self.root/'attachments/old.bin';target.parent.mkdir();target.write_bytes(b'data');(self.root/'conversation-index.json').write_text(json.dumps({'entries':[{'id':'chat-two','attachments':[dict(id='file-one',name='one.bin',size=4,status='saved',path='attachments/old.bin')]}]}));self.index([self.row()]);r=self.catalog.list()['entries'][0];self.assertTrue(r['available']);self.assertEqual(r['conversations'],['chat-one','chat-two'])
+ def test_catalog_construction_does_not_resolve_every_attachment_on_disk(self):
+  self.index([dict(id=str(i),name='photo.jpeg',expected_path='attachments/library/'+str(i)+'/photo.jpeg') for i in range(1000)]);original=Path.resolve;calls=[]
+  def resolve(path,*args,**kwargs):calls.append(path);return original(path,*args,**kwargs)
+  with patch.object(Path,'resolve',resolve):self.catalog.refresh()
+  self.assertLess(len(calls),30,'Catalog metadata must not traverse the filesystem once per attachment')
+ def test_changed_symlink_cannot_escape_catalog_root_at_delivery(self):
+  self.index([dict(id='file-one',name='one.bin',path='attachments/one.bin',size=4,status='saved')]);target=self.root/'attachments/one.bin';target.write_bytes(b'data');key=self.catalog.list()['entries'][0]['key'];outside=self.base/'outside';outside.mkdir();(outside/'one.bin').write_bytes(b'data');target.unlink()
+  try:target.symlink_to(outside/'one.bin')
+  except OSError:self.skipTest('Creating symlinks is unavailable')
+  with self.assertRaises(FileNotFoundError):self.catalog.file(key)
  def test_service_error_copy_is_rejected(self):
   data=json.dumps({'status':'error','error_type':'file_not_found'}).encode();r=self.row();r['size']=len(data);self.index([r]);source=self.base/'bad';source.write_bytes(data)
   with self.assertRaises(ValueError):self.catalog.import_copy(self.catalog.list()['entries'][0]['key'],source)

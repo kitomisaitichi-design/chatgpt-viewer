@@ -5,5 +5,6 @@
 .document-header{min-height:0;padding:0;justify-content:initial}.linked-images-label{flex-basis:100%;font-size:11px;color:var(--muted)}
 
 .message-images.pending-images:empty{display:block;min-height:1px;margin:0}
+.image-load-error{flex-basis:100%;color:var(--muted);font-size:12px;overflow-wrap:anywhere}
 
 .document-body p{color:var(--text);font-size:inherit}.document-dialog.message{margin:auto;font-size:var(--font);line-height:1.65}.document-dialog .document-card{font-size:var(--font)}

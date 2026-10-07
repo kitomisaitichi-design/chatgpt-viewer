@@ -67,15 +67,16 @@ class FileCatalog:
                 if not fid:continue
                 key=hashlib.sha256((str(root)+'\0'+fid).encode()).hexdigest()[:32]
                 relative=safe_relative(f.get('path')) or safe_relative(f.get('expected_path'))
-                target=(root/relative).resolve() if relative else None
-                if target and not target.is_relative_to(root):target=None;relative=None
+                # safe_relative already rejects absolute paths and traversal. Resolve
+                # only the selected file at delivery, not every missing Library path.
+                target=root/relative if relative else None
                 previous=entries.get(key,{})
                 compatible_hash=not f.get('sha256') or f.get('sha256')==previous.get('sha256')
                 if previous.get('target') and previous['target'].is_file() and compatible_hash and (not target or not target.is_file()) and (f.get('size') is None or previous.get('size')==f.get('size')):
                     target=previous['target'];relative=previous['relative']
                 refs=[*previous.get('source_refs',[]),*(f.get('source_refs',[]) if isinstance(f.get('source_refs'),list) else [])]
                 refs=[dict((k,str(r[k])) for k in ('kind','name','conversationId','presence','sourceKey') if r.get(k) is not None) for r in refs if isinstance(r,dict)]
-                refs=list({json.dumps(r,sort_keys=True):r for r in refs}.values())
+                refs=list({tuple(sorted(r.items())):r for r in refs}.values())
                 conversations=sorted({str(c) for c in [*previous.get('conversations',[]),*(cids if isinstance(cids,list) else []),*(r.get('conversationId') for r in refs)] if c})
                 manual=f.get('manual_url') or 'https://chatgpt.com/library'
                 if not str(manual).startswith('https://chatgpt.com/'):manual='https://chatgpt.com/library'
@@ -85,6 +86,14 @@ class FileCatalog:
                 retained=bool(f.get('historical')) or any(r.get('presence') not in (None,'','present') for r in refs)
                 entries[key]={**previous,'key':key,'id':fid,'name':str(f.get('name') or f.get('filename') or fid),'size':f.get('size'),'mime':f.get('mime') or f.get('mime_type'),'status':f.get('status','unknown'),'error':str(f.get('error') or ''),'relative':relative,'root':root,'target':target,'conversations':conversations,'sha256':f.get('sha256') or (previous.get('sha256') if target==previous.get('target') else None),'manual_url':manual,'source':'library' if file_library else previous.get('source','attachment'),'source_refs':refs,'sources':sorted(sources),'historical':bool(f.get('historical')),'retained':retained,'duplicate_of':f.get('duplicate_of'),'version_info':f.get('version_info') if isinstance(f.get('version_info'),dict) else None}
         self.entries=entries;self.notes=notes;self.signature=signature
+    def available_path(self,item):
+        target=item['target']
+        if not target:return None
+        try:
+            if target.is_symlink() or not target.resolve().is_relative_to(item['root']):return None
+            st=target.stat()
+            return target if target.is_file() and (item['size'] is None or st.st_size==item['size']) else None
+        except OSError:return None
     def public(self,item):
         target=item['target'];exists=bool(target and target.is_file() and not target.is_symlink() and target.resolve().is_relative_to(item['root']));actual=target.stat().st_size if exists else None
         expected=item['size'];matches=exists and (expected is None or actual==expected)
@@ -100,8 +109,8 @@ class FileCatalog:
         with self.lock:
             self.refresh();entry=self.entries.get(key)
             if not entry:raise FileNotFoundError('Unknown saved file.')
-            target=entry['target']
-            if not target or not self.public(entry)['available']:raise FileNotFoundError('Save a complete file into its expected backup path, or import a downloaded copy.')
+            target=self.available_path(entry)
+            if not target:raise FileNotFoundError('Save a complete file into its expected backup path, or import a downloaded copy.')
             return target,entry
     def import_copy(self,key,source):
         with self.lock:
