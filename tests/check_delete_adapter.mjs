@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 const folder=path.resolve(process.argv[2]);
-const {turn,pending}=await import(pathToFileURL(path.join(folder,'viewer-delete-adapter.mjs')));
+const {turn,pending,readQueue}=await import(pathToFileURL(path.join(folder,'viewer-delete-adapter.mjs')));
 const {Engine}=await import(pathToFileURL(path.join(folder,'engine.mjs')));
 const {newJob,mergeEntry}=await import(pathToFileURL(path.join(folder,'core.mjs')));
 const base=await fs.mkdtemp(path.join(os.tmpdir(),'viewer-delete-contract-'));
@@ -43,5 +43,6 @@ try{
  const {drain}=await import(pathToFileURL(path.join(folder,'viewer-runner.mjs')));f=await fixture('queue-only-drain');let ran=0;class QueueEngine extends Engine{async run(){throw Error('Full inventory must not run');}}await drain(QueueEngine,f.job,{save:async()=>{},sleep:async()=>{},now:()=>Date.now(),changed:()=>{}},{...f,bridge:async()=>{ran++;return {ok:true,status:200,data:{is_visible:false}};}});assert.equal(ran,1);cases++;
  globalThis.indexedDB={open:()=>({})};const {wake}=await import(pathToFileURL(path.join(folder,'viewer-wake.mjs')));f=await fixture('wake-owner');f.root.queryPermission=async()=> 'granted';const meta=new Map([['lastScope',scope],['folder:'+scope.key,f.root]]),wakeStore={get:async(_,k)=>meta.get(k),put:async(_,k,v)=>meta.set(k,v)};let opened=0,owners=[];const api={runtime:{getURL:p=>'chrome-extension://fixture/'+p},tabs:{query:async()=>owners,create:async o=>{assert.equal(o.active,false);opened++;}}};await wake(api,wakeStore);assert.equal(opened,1);owners=[{id:7}];await wake(api,wakeStore);assert.equal(opened,1);owners=[];meta.set('viewerConnection:'+scope.key,{blocked:true,nonce:''});await wake(api,wakeStore);assert.equal(opened,1);await f.write('.viewer-queue/reconnect.json',JSON.stringify({nonce:'user-reset'}));await wake(api,wakeStore);assert.equal(opened,2);cases++;
  const {own}=await import(pathToFileURL(path.join(folder,'viewer-owner.mjs')));let scheduled,ownersReady=0,blocked=0,occupied=true;const cancel=own({locks:{request:async(_,options,fn)=>{assert.equal(options.ifAvailable,true);return fn(occupied?null:{});}},ready:async()=>{ownersReady++;},blocked:()=>{blocked++;},error:e=>{throw e;},schedule:fn=>{scheduled=fn;return 1;},unschedule:()=>{}});await new Promise(r=>setTimeout(r,0));assert.equal(blocked,1);assert.equal(ownersReady,0);occupied=false;scheduled();await new Promise(r=>setTimeout(r,0));assert.equal(ownersReady,1);scheduled();assert.equal(ownersReady,1);cancel();cases++;
+ assert.equal(await readQueue(null,'.viewer-queue/reconnect.json'),null);cases++;
  console.log(cases+' exporter adapter contract cases passed (simulated HTTP, real exporter gate/pacing).');
 }finally{await fs.rm(base,{recursive:true,force:true});}

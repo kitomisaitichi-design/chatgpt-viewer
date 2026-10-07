@@ -4,7 +4,7 @@ import {recordLimit,recordSuccess} from './awareness.mjs';
 const schema='offline-viewer/delete-v1';
 const enabled=c=>c?.enabled===true&&c.schema===schema&&Number.isFinite(c.updated)&&Date.now()/1000-c.updated<45&&c.updated<Date.now()/1000+10;
 async function directory(root,name,create=false){return root.getDirectoryHandle(name,{create});}
-export async function readQueue(root,path){try{let dir=root;const parts=path.split('/');for(const part of parts.slice(0,-1))dir=await directory(dir,part);const file=await (await dir.getFileHandle(parts.at(-1))).getFile();if(file.size>2*1024*1024)throw Error('Viewer queue file is too large');return JSON.parse(await file.text());}catch(e){if(e.name==='NotFoundError')return null;throw e;}}
+export async function readQueue(root,path){if(!root)return null;try{let dir=root;const parts=path.split('/');for(const part of parts.slice(0,-1))dir=await directory(dir,part);const file=await (await dir.getFileHandle(parts.at(-1))).getFile();if(file.size>2*1024*1024)throw Error('Viewer queue file is too large');return JSON.parse(await file.text());}catch(e){if(e.name==='NotFoundError')return null;throw e;}}
 export async function heartbeat({root,job,canEdit,connected,write,connection={}}){
  if(!root||!job||!canEdit)return;
  await write('.viewer-queue/bridge.json',JSON.stringify({schema,version:'2.4.12+viewer-2',scope:job.scope.key,updated:Date.now()/1000,connected:!!connected,connection,capabilities:['delete-chat','verify-chat','shared-pacing'],note:'Library cleanup is local only; remote Library deletion is unsupported.'}));

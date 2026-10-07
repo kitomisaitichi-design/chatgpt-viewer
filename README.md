@@ -1,17 +1,21 @@
-# Offline Chat Viewer · v1.1.14
+# Offline Chat Viewer · v1.1.15
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.14-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.14/Offline-Chat-Viewer-v1.1.14-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.14/Offline-Chat-Viewer-v1.1.14-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.15-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.15/Offline-Chat-Viewer-v1.1.15-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.15/Offline-Chat-Viewer-v1.1.15-Windows.zip.sha256.txt)
 
 ## What the viewer does
 
 Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Normal reading and reversible Trash keep your exports intact. The optional reviewed deletion queue can remove a remote ChatGPT conversation and clean up its verified, unshared local Library copies.
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## First connection setup · v1.1.15
+
+Connect also works before a backup folder is chosen. Missing optional queue metadata now returns an empty state instead of an error. The background/status features below are retained. Verified with 17 exporter contract scenarios (simulated HTTP), 255 backend tests and five renderer suites; real authenticated deletion/wake remain unverified.
 
 ## Background connection and remote status · v1.1.14
 
