@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.13'
+VERSION = '1.1.14'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -318,6 +318,7 @@ class Archive:
             CREATE TABLE IF NOT EXISTS title_rows(cid TEXT PRIMARY KEY,rowid INTEGER);
             CREATE TABLE IF NOT EXISTS manifest_entries(cid TEXT,manifest TEXT,metadata TEXT,path TEXT,available INTEGER,PRIMARY KEY(cid,manifest));
             CREATE TABLE IF NOT EXISTS exporter_manifests(path TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS remote_chat_state(root TEXT,cid TEXT,scope TEXT,state TEXT,checked REAL,source TEXT,detail TEXT,PRIMARY KEY(root,cid));
             CREATE TABLE IF NOT EXISTS scanned_files(path TEXT PRIMARY KEY,fingerprint TEXT,status TEXT);
             CREATE TABLE IF NOT EXISTS vectors(cid TEXT,seq INTEGER,part INTEGER,hash TEXT,vector BLOB,PRIMARY KEY(cid,seq,part));
             ''')
@@ -623,7 +624,8 @@ class Archive:
                     project=m.get('project') if isinstance(m.get('project'),str) else '',path=r['path'],fingerprint='',count=0,folder=str(Path(r['path']).parent),
                     category='',pinned=0,position=0,alias='',trashed=0,color='',sticky=0,bookmarked=0,kind_override='',loaded=False))
                 ready[-1].update({k:organization.get(r['cid'],{}).get(k,ready[-1][k]) for k in ORGANIZATION_FIELDS})
-            return ready
+            from remote_state import enrich
+            return enrich(self,ready)
     def coverage(self):
         with self.connect() as db:
             expected={r[0] for r in db.execute('SELECT DISTINCT cid FROM manifest_entries')}
@@ -653,6 +655,14 @@ class Archive:
             db.execute('INSERT OR REPLACE INTO manifest_entries VALUES(?,?,?,?,?)',(cid,str(manifest),metadata,path,int(available)))
             if entry.get('deletion_verified') and entry.get('remote_deleted_at'):db.execute('INSERT OR IGNORE INTO organization(cid,trashed) VALUES(?,1)',(cid,))
         self.revision+=1
+        if entry.get('deletion_verified') and entry.get('remote_deleted_at'):
+            from exporter_bridge import read_metadata
+            scope=(read_metadata(manifest) or {}).get('scope')
+            if isinstance(scope,dict):scope=scope.get('key')
+            if scope:
+                from remote_state import record
+                stamp=entry['remote_deleted_at'];stamp=stamp/1000 if isinstance(stamp,(float,int)) and stamp>1e11 else stamp
+                record(self,manifest.parent,cid,str(scope),'deleted','verified exporter index',checked=stamp if isinstance(stamp,(float,int)) else None)
         if available and not self.live_sources.get(cid,{}).get('loaded'):
             self.live_sources[cid]=dict(id=cid,title=entry.get('title') or Path(path).stem,url=entry.get('url') or ('' if signal and signal[0]=='codex' else 'https://chatgpt.com/c/'+cid),created=epoch(entry.get('create_time')),updated=epoch(entry.get('update_time')),kind=signal[0] if signal else 'chat',kind_evidence=signal[1] if signal else 'No saved Work/Codex product marker',project=entry.get('project') if isinstance(entry.get('project'),str) else '',path=path,fingerprint='',count=0,folder=str(Path(path).parent.relative_to(root)),loaded=False)
 
@@ -1404,6 +1414,8 @@ class Handler(BaseHTTPRequestHandler):
                     root=tk.Tk();root.withdraw();root.attributes('-topmost',True);folder=filedialog.askdirectory(title='Choose your exported chats folder',initialdir=d.get('path') or str(APP));root.destroy()
                 self.send({'path':folder});return
             elif self.path=='/api/settings':a.save_settings(d)
+            elif self.path=='/api/remote-status/check':self.send(self.server.deletions.check_remote(d.get('id')));return
+            elif self.path=='/api/connection/reconnect':self.send(self.server.deletions.reconnect());return
             elif self.path=='/api/delete-queue/add':self.send(self.server.deletions.enqueue(d.get('ids'),d.get('mode','library')));return
             elif self.path=='/api/delete-queue/action':self.send(self.server.deletions.action(d.get('action'),d.get('ids')));return
             elif self.path=='/api/delete-queue/install-bridge':

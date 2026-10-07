@@ -1,6 +1,27 @@
 'use strict';
 window.Collections=(()=>{
- const selected=new Set(),trashRows=new Map(),bookmarkRows=new Map(),queueRows=new Map();let state={jobs:[],bridges:[]},pollTimer=null,polling=false,follow=true,lastActive='',adding=false;
+ const selected=new Set(),trashRows=new Map(),bookmarkRows=new Map(),queueRows=new Map(),checkedChats=new Map();let state={jobs:[],bridges:[]},pollTimer=null,polling=false,follow=true,lastActive='',adding=false,reconnecting=false;
+ const pathKey=p=>String(p||'').replaceAll('\\','/').toLocaleLowerCase();
+ function currentBridge(){const path=pathKey(S.selected?.path);return state.bridges.find(b=>path.startsWith(pathKey(b.root)+'/'))||(S.selected?null:state.bridges[0]);}
+ function connection(){
+  const node=$('connection-state'),retry=$('connection-reconnect');if(!node)return;
+  const b=currentBridge()||(!S.selected?.url?state.bridges[0]:null),c=b?.connection||{},busy=reconnecting||b?.reconnecting;
+  let label=b?.connected?'Connected':busy?'Reconnecting…':c.blocked?'Reconnect needed':b?.fresh&&c.attempts>0?'Retry '+Math.min(c.attempts,2)+' / 2':'Disconnected';
+  node.className='connection-state '+(b?.connected?'connected':busy||b?.fresh&&c.attempts>0&&!c.blocked?'connecting':'');
+  node.lastChild.textContent=label;node.title=b?.connected?'ChatGPT browser bridge · authenticated account matches':c.error||'ChatGPT browser bridge disconnected. Local reading remains available.';
+  retry.hidden=!!b?.connected;retry.disabled=busy||!state.bridges.length;retry.title=state.bridges.length?'Reset the two-retry budget and reconnect':'Load an exporter folder with an account index first';
+  remoteHeader(S.selected);
+ }
+ function remoteHeader(c){
+  const badge=$('remote-chat-state');if(!badge)return;const unavailable=['deleted','unavailable'].includes(c?.remote_state);
+  badge.hidden=!unavailable;badge.textContent=c?.remote_state==='deleted'?'Deleted on ChatGPT · local copy':c?.remote_state==='unavailable'?'Unavailable on ChatGPT · local copy':'';badge.title=c?.remote_detail||'Saved transcript and local attachments remain readable.';
+  if(unavailable){$('catalog-online').hidden=true;$('continue').hidden=true;}
+  const b=currentBridge();if(!c||!b||c.remote_state==='deleted'||b.connection?.blocked||Date.now()/1000-(c.remote_checked||0)<900||Date.now()-(checkedChats.get(c.id)||0)<900000)return;
+  checkedChats.set(c.id,Date.now());while(checkedChats.size>1000)checkedChats.delete(checkedChats.keys().next().value);
+  // Only account-indexed chats are checked; this never starts archive discovery.
+  api('/api/remote-status/check',{id:c.id}).catch(error=>{if(S.selected?.id===c.id)$('connection-state').title=error.message;});
+ }
+ async function reconnect(){if(reconnecting)return;reconnecting=true;connection();try{const r=await api('/api/connection/reconnect',{});toast(r.message);checkedChats.clear();}finally{reconnecting=false;await poll();}}
  const button=(label,icon,fn,cls='icon')=>{const b=el('button',cls);b.type='button';b.title=label;b.setAttribute('aria-label',label);ViewerIcons.set(b,icon);b.onclick=safeRun(fn);return b;};
  const pending=()=>state.jobs.filter(j=>!['confirmed','cancelled'].includes(j.state));
  const active=()=>pending().some(j=>['preparing','waiting','running','retrying'].includes(j.state));
@@ -41,9 +62,9 @@ window.Collections=(()=>{
   $('delete-queue-count').textContent=jobs.filter(j=>j.state==='confirmed').length+' / '+jobs.length;
   $('delete-queue-progress').max=Math.max(jobs.length,1);$('delete-queue-progress').value=jobs.filter(j=>j.state==='confirmed').length;
   if(!$('exporter-adapter-path').value&&state.adapter_folder)$('exporter-adapter-path').value=state.adapter_folder;
-  $('delete-queue-connection').textContent=state.bridges.some(b=>b.connected)?'Exporter connected · uses its shared request scheduler':'Waiting for exporter bridge · open/reconnect exporter 2.4.12 after installing the adapter';
+  $('delete-queue-connection').textContent=state.bridges.some(b=>b.connected)?'Connected · one browser worker, shared exporter scheduler':state.bridges.some(b=>b.connection?.blocked)?'Reconnect needed · two automatic retries failed. Use Reconnect in the status bar.':'Waiting for the browser worker · exporter dashboard can stay closed after adapter setup';connection();
   for(const job of jobs){let row=queueRows.get(job.id);if(!row){row=el('div','delete-job');row.dataset.id=job.id;row.append(el('span','delete-job-state'),el('div','delete-job-title'),button('Remove queued deletion','close',async()=>{state=await api('/api/delete-queue/action',{action:'remove',ids:[job.id]});renderQueue();}));queueRows.set(job.id,row);}row.className='delete-job '+job.state;row.children[0].replaceChildren();if(job.state==='confirmed')row.children[0].append(ViewerIcons.svg('check'));else row.children[0].textContent=({queued:'Queued',preparing:'Backing up',waiting:'Waiting',running:'Running',retrying:'Cooldown',paused:'Paused',failed:'Attention'})[job.state]||job.state;
-   row.children[1].replaceChildren(el('strong','',job.title),el('small','muted',job.error||(job.mode==='preserve'?'Preserve local files':'Clean up unshared local Library copies · recovery retained')));row.children[2].hidden=!['queued','paused','failed'].includes(job.state);nodes.push(row);
+   row.children[1].replaceChildren(el('strong','',job.title),el('small','muted',job.error||(job.remote_state==='unavailable'?'Unavailable on ChatGPT · local files retained':job.mode==='preserve'?'Preserve local files':'Clean up unshared local Library copies · recovery retained')));row.children[2].hidden=!['queued','paused','failed'].includes(job.state);nodes.push(row);
   }
   if(!nodes.length)nodes.push(el('p','muted','The deletion queue is empty. Select chats in Trash to add them.'));SidebarOrder.reconcile(list,nodes);
   const current=jobs.find(j=>['preparing','running','retrying'].includes(j.state))?.id;if(follow&&current&&current!==lastActive&&!dialog.hidden&&dialog.open)queueRows.get(current)?.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth',block:'nearest'});lastActive=current||'';
@@ -55,6 +76,7 @@ window.Collections=(()=>{
  async function queueAction(action){const b=$('delete-queue-'+(action==='run'?'run':action));b.disabled=true;try{state=await api('/api/delete-queue/action',{action,ids:pending().map(j=>j.id)});renderQueue();}finally{await poll();}}
  async function discover(){const b=$('native-discover');b.disabled=true;try{await api('/api/codex/discover',{});for(;;){const value=await api('/api/codex/status');$('native-status').textContent=(value.running?'Discovering native sessions… ':'Native Codex: ')+value.found+' available'+(value.errors.length?' · '+value.errors.join('; '):'');if(!value.running)break;await new Promise(r=>setTimeout(r,1500));}}finally{b.disabled=false;}}
  function init(){
+  const bridgeStatus=el('span','connection-state');bridgeStatus.id='connection-state';bridgeStatus.setAttribute('role','status');bridgeStatus.append(el('span','connection-dot'),document.createTextNode('Disconnected'));const retry=el('button','','Reconnect');retry.id='connection-reconnect';retry.onclick=safeRun(reconnect);const group=el('span','connection-group');group.append(bridgeStatus,retry);$('message-stat').after(group);const remote=el('span','remote-chat-state');remote.id='remote-chat-state';remote.hidden=true;$('catalog-message-count').after(remote);
   const trash=$('trash-panel'),footer=el('div','collection-footer'),queue=el('button','delete-primary','Queue delete');queue.id='trash-queue-delete';queue.onclick=safeRun(()=>stage([...selected]));footer.append(queue);trash.append(footer);
   const current=el('button','','Move current chat to Trash');current.onclick=safeRun(async()=>{if(!S.selected)return;await organize(S.selected.id,{trashed:1});renderSidebar();renderTrash();});trash.insertBefore(current,$('trash-filter'));
   const p=el('section','collection-panel');p.id='bookmarks-panel';p.hidden=true;p.setAttribute('role','dialog');p.setAttribute('aria-label','Bookmarks');const head=el('div','trash-heading');head.append(el('h3','','Bookmarks'),button('Close Bookmarks','close',()=>{p.hidden=true;}));const toggle=el('button');toggle.id='bookmark-current';toggle.onclick=safeRun(async()=>{if(!S.selected)return;await organize(S.selected.id,{bookmarked:S.selected.bookmarked?0:1});updateBookmarks();});const search=el('input');search.id='bookmarks-filter';search.type='search';search.placeholder='Find a bookmarked chat';search.setAttribute('aria-label',search.placeholder);search.oninput=updateBookmarks;const list=el('div');list.id='bookmarks-list';p.append(head,toggle,search,list);document.body.append(p);
@@ -67,5 +89,5 @@ window.Collections=(()=>{
   const native=el('section','native-discovery'),nativeButton=el('button','','Detect native Codex chats');nativeButton.id='native-discover';nativeButton.onclick=safeRun(discover);const status=el('p','muted');status.id='native-status';status.setAttribute('role','status');status.textContent='Uses CODEX_HOME or your Windows profile .codex folder. Session bodies load when opened.';const nativeToggle=el('label','check'),nativeCheck=el('input');nativeCheck.type='checkbox';nativeCheck.id='native-startup';nativeCheck.checked=S.settings.nativeCodexEnabled!==false;nativeCheck.onchange=safeRun(()=>saveSetting('nativeCodexEnabled',nativeCheck.checked));nativeToggle.append(nativeCheck,document.createTextNode('Discover native Codex at startup'));native.append(nativeButton,nativeToggle,status);$('folder-dialog').append(native);
   document.addEventListener('keydown',e=>{if(e.key==='Escape')p.hidden=true;});window.addEventListener('resize',()=>{if(!p.hidden)place(p);});document.addEventListener('visibilitychange',()=>{if(!document.hidden)poll();});updateBookmarks();poll();
  }
- document.addEventListener('DOMContentLoaded',init);return {renderTrash,updateBookmarks,showBookmarks,showQueue,stage};
+ document.addEventListener('DOMContentLoaded',init);return {renderTrash,updateBookmarks,showBookmarks,showQueue,stage,remoteHeader,connection};
 })();

@@ -23,6 +23,48 @@ class DeletionQueue:
             # A process restart never silently starts a destructive run.
             db.execute("UPDATE deletion_jobs SET state='paused' WHERE state IN ('preparing','waiting','running','retrying')")
         self.control(False)
+        # Upgrade existing verified receipts without changing content hashes or organization.
+        from remote_state import record
+        for row in self.rows():
+            if row['state']=='confirmed':record(archive,row['root'],row['cid'],row['scope'],json.loads(row['receipt'] or '{}').get('remote_state','deleted'),'deletion receipt',checked=row['updated'])
+        roots=self.roots()
+        with archive.connect() as db:manifests=list(db.execute('SELECT cid,manifest,metadata FROM manifest_entries'))
+        for item in manifests:
+            metadata=json.loads(item['metadata']);root=Path(item['manifest']).parent.resolve()
+            if root in roots and metadata.get('deletion_verified') and metadata.get('remote_deleted_at'):
+                stamp=metadata['remote_deleted_at'];stamp=stamp/1000 if isinstance(stamp,(float,int)) and stamp>1e11 else stamp
+                record(archive,root,item['cid'],roots[root],'deleted','verified exporter index',checked=stamp if isinstance(stamp,(float,int)) else None)
+    def chat_account(self,cid):
+        if not isinstance(cid,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{8,160}',cid):raise ValueError('Choose a saved ChatGPT conversation')
+        roots=self.roots()
+        with self.archive.connect() as db:
+            options={Path(r[0]).parent.resolve() for r in db.execute('SELECT manifest FROM manifest_entries WHERE cid=?',(cid,))}&roots.keys()
+        if len(options)!=1:raise ValueError('Remote actions require one unambiguous exporter account/index')
+        root=options.pop();return root,roots[root]
+    def check_remote(self,cid):
+        root,scope=self.chat_account(cid);bridge=read(root/'.viewer-queue/bridge.json')
+        if bridge.get('connection',{}).get('blocked'):return dict(queued=False,blocked=True)
+        target=root/'.viewer-queue/checks'/(cid+'.json');old=read(target)
+        if old and time.time()-old.get('created',0)<900:return dict(queued=True,id=old['id'])
+        value=dict(schema='offline-viewer/status-v1',id=uuid.uuid4().hex,cid=cid,scope=scope,created=time.time())
+        write(target,value);self.start();return dict(queued=True,id=value['id'])
+    def reconnect(self):
+        for root in self.roots():write(root/'.viewer-queue/reconnect.json',dict(nonce=uuid.uuid4().hex,updated=time.time()))
+        self.start();return dict(requested=True,message='Reconnecting through the browser worker; allow up to 30 seconds for its wake alarm.')
+    def collect_checks(self):
+        from remote_state import record
+        for root,scope in self.roots().items():
+            directory=root/'.viewer-queue/checks'
+            if not directory.is_dir():continue
+            for path in list(directory.glob('*.json'))[:1000]:
+                command=read(path);ident=command.get('id','')
+                if not re.fullmatch(r'[a-f0-9]{32}',ident) or command.get('schema')!='offline-viewer/status-v1' or command.get('scope')!=scope:continue
+                receipt=read(root/'.viewer-queue/check-receipts'/(ident+'.json'))
+                if any(receipt.get(k)!=command.get(k) for k in ('schema','id','cid','scope')) or receipt.get('verified') is not True:continue
+                if receipt.get('state') not in ('available','deleted','unavailable'):continue
+                with self.archive.connect() as db:old=db.execute('SELECT checked FROM remote_chat_state WHERE root=? AND cid=?',(str(root),command['cid'])).fetchone()
+                checked=receipt.get('checked',0)
+                if not old or old['checked']<checked:record(self.archive,root,command['cid'],scope,receipt['state'],'authenticated lookup',receipt.get('detail',''),checked=checked)
     def rows(self):
         with self.archive.connect() as db:return [dict(r) for r in db.execute('SELECT * FROM deletion_jobs ORDER BY created,id')]
     def roots(self):
@@ -53,8 +95,12 @@ class DeletionQueue:
                 root=options.pop();prepared.append((cid,c,root,roots[root]))
         with self.lock,self.archive.connect() as db:
             for cid,c,root,scope in prepared:
-                old=db.execute('SELECT state FROM deletion_jobs WHERE scope=? AND cid=?',(scope,cid)).fetchone()
-                if old and old['state']!='cancelled':continue
+                old=db.execute('SELECT state,mode FROM deletion_jobs WHERE scope=? AND cid=?',(scope,cid)).fetchone()
+                if old and old['state']!='cancelled':
+                    if old['mode']!=mode:
+                        if old['state'] not in ('queued','failed'):raise ValueError('Retention cannot change while this job is active or already complete')
+                        db.execute("UPDATE deletion_jobs SET mode=? WHERE scope=? AND cid=?",(mode,scope,cid))
+                    continue
                 db.execute('INSERT OR REPLACE INTO deletion_jobs VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(uuid.uuid4().hex,cid,scope,str(root),c['alias'] or c['title'],mode,'queued','',time.time(),time.time(),'',''))
         return self.status()
     def control(self,enabled,run=None):
@@ -114,6 +160,7 @@ class DeletionQueue:
             saved.append(dict(path=str(path),copy=str(target),sha256=sha,conversations=f['conversations'],root=str(f['root']),size=before.st_size))
         write(base/'index.json',dict(schema=SCHEMA,cid=row['cid'],scope=row['scope'],markdown_origin=origin,files=saved))
     def tick(self):
+        self.collect_checks()
         rows=self.rows();prepared=[]
         for row in rows:
             if row['state']!='preparing':continue
@@ -121,7 +168,7 @@ class DeletionQueue:
                 self.snapshot(row)
                 command={k:row[k] for k in ('id','cid','scope','mode','run','title')};command.update(schema=SCHEMA,created=row['created'])
                 with self.archive.connect() as db:
-                    metadata=[json.loads(r[0]) for r in db.execute('SELECT metadata FROM manifest_entries WHERE cid=?',(row['cid'],))]
+                    metadata=[json.loads(r['metadata']) for r in db.execute('SELECT manifest,metadata FROM manifest_entries WHERE cid=?',(row['cid'],)) if Path(r['manifest']).parent.resolve()==Path(row['root']).resolve()]
                     state=db.execute('SELECT state FROM deletion_jobs WHERE id=?',(row['id'],)).fetchone()
                 if not state or state['state']!='preparing':continue
                 command['content_hash']=next((m.get('content_hash') for m in metadata if m.get('content_hash')),None)
@@ -143,12 +190,22 @@ class DeletionQueue:
             if state not in ('running','retrying','confirmed','failed','paused'):continue
             if state=='confirmed':
                 if receipt.get('verified') is not True:continue
-                self.archive.organize(row['cid'],{'trashed':1})
-                if row['mode']=='library':
+                from remote_state import record
+                remote=receipt.get('remote_state','deleted')
+                if remote not in ('deleted','unavailable'):continue
+                record(self.archive,row['root'],row['cid'],row['scope'],remote,'deletion receipt',checked=receipt.get('updated') or time.time())
+                if remote=='deleted':self.archive.organize(row['cid'],{'trashed':1})
+                if row['mode']=='library' and remote=='deleted':
                     try:self.cleanup(row)
                     except Exception as error:receipt['error']='Remote deletion confirmed; local cleanup needs attention: '+str(error)
             elif row['state']=='paused' and state in ('running','retrying'):continue
             with self.archive.connect() as db:db.execute('UPDATE deletion_jobs SET state=?,updated=?,error=?,receipt=? WHERE id=?',(state,time.time(),receipt.get('error',''),json.dumps(receipt),row['id']))
+        # Completed metadata must not exhaust the browser's bounded active inbox.
+        for row in self.rows():
+            if row['state'] not in ('confirmed','cancelled','failed'):continue
+            source=Path(row['root'])/'.viewer-queue/commands'/(row['id']+'.json')
+            if source.exists():
+                target=Path(row['root'])/'.viewer-queue/history'/row['run']/(row['id']+'.json');target.parent.mkdir(parents=True,exist_ok=True);os.replace(source,target)
     def cleanup(self,row):
         # Only verified, unshared local Library copies are removed. Recovery copies stay available.
         index=read(self.archive.data_dir/'deletion-recovery'/row['id']/'index.json')
@@ -170,8 +227,10 @@ class DeletionQueue:
         rows=self.rows();bridges=[]
         for root,scope in self.roots().items():
             bridge=read(root/'.viewer-queue/bridge.json')
-            bridges.append(dict(root=str(root),scope=scope,connected=bridge.get('connected') is True and bridge.get('scope')==scope and time.time()-bridge.get('updated',0)<45,version=bridge.get('version',''),error=bridge.get('error','')))
-        return dict(jobs=[{k:v for k,v in r.items() if k!='receipt'} for r in rows],bridges=bridges,adapter_folder=self.archive.settings().get('exporterBridgeFolder',''))
+            reset=read(root/'.viewer-queue/reconnect.json');connection=bridge.get('connection',{}) if bridge.get('scope')==scope else {}
+            bridges.append(dict(root=str(root),scope=scope,connected=bridge.get('connected') is True and bridge.get('scope')==scope and time.time()-bridge.get('updated',0)<45,version=bridge.get('version',''),error=bridge.get('error',''),connection=connection,reconnecting=bool(reset.get('nonce') and connection.get('nonce')!=reset['nonce'] and time.time()-reset.get('updated',0)<90),fresh=time.time()-bridge.get('updated',0)<45))
+        jobs=[dict({k:v for k,v in r.items() if k!='receipt'},remote_state=json.loads(r['receipt'] or '{}').get('remote_state','')) for r in rows]
+        return dict(jobs=jobs,bridges=bridges,adapter_folder=self.archive.settings().get('exporterBridgeFolder',''))
     def close(self):
         self.stop_event.set();self.control(False)
         if self.worker and self.worker is not threading.current_thread():self.worker.join(timeout=3)

@@ -47,6 +47,38 @@ class CollectionsNative(unittest.TestCase):
   cid,_=self.chat();q=self.queue();q.enqueue([cid]);row=self.run_queue(q);receipt=dict(schema=SCHEMA,id=row['id'],cid=cid,scope='wrong',run=row['run'],state='confirmed',verified=True);path=self.root/'.viewer-queue/receipts'/(row['id']+'.json');write(path,receipt);q.tick();self.assertEqual(q.rows()[0]['state'],'waiting')
   receipt['scope']=row['scope'];receipt['verified']=False;write(path,receipt);q.tick();self.assertEqual(q.rows()[0]['state'],'waiting')
   receipt['verified']=True;receipt['run']='old-run';write(path,receipt);q.tick();self.assertEqual(q.rows()[0]['state'],'waiting')
+ def test_unavailable_is_not_deleted_and_never_cleans_local_library(self):
+  cid,p=self.chat();q=self.queue();q.enqueue([cid]);row=self.run_queue(q)
+  with patch.object(q,'cleanup') as cleanup:self.receipt(row,remote_state='unavailable');q.tick();cleanup.assert_not_called()
+  chat=self.a.catalog()[0];self.assertEqual(chat['remote_state'],'unavailable');self.assertFalse(chat['trashed']);self.assertTrue(p.is_file())
+  self.assertFalse((self.root/'.viewer-queue/commands'/(row['id']+'.json')).exists());self.assertTrue((self.root/'.viewer-queue/history'/row['run']/(row['id']+'.json')).exists())
+  q.close();self.q=DeletionQueue(self.a,FileCatalog(self.a));self.assertEqual(self.a.catalog()[0]['remote_state'],'unavailable')
+ def test_status_receipt_scope_unknown_and_changed_hash(self):
+  cid,p=self.chat();q=self.queue()
+  with patch.object(q,'start'):request=q.check_remote(cid)
+  check=read(self.root/'.viewer-queue/checks'/(cid+'.json'));target=self.root/'.viewer-queue/check-receipts'/(request['id']+'.json')
+  receipt=dict(check,state='deleted',verified=True,checked=123,scope='wrong');write(target,receipt);q.collect_checks();self.assertNotIn('remote_state',self.a.catalog()[0])
+  receipt.update(scope=check['scope'],state='unknown',verified=False);write(target,receipt);q.collect_checks();self.assertNotIn('remote_state',self.a.catalog()[0])
+  receipt.update(state='deleted',verified=True);write(target,receipt);q.collect_checks();self.assertEqual(self.a.catalog()[0]['remote_state'],'deleted')
+  self.assertEqual(read(self.root/'conversation-index.json')['entries'][0]['content_hash'],'original-exporter-hash');self.assertTrue(p.is_file())
+ def test_status_cache_and_two_retry_reset_nonce(self):
+  cid,_=self.chat();q=self.queue()
+  with patch.object(q,'start'):
+   first=q.check_remote(cid);self.assertEqual(first,q.check_remote(cid));q.reconnect()
+  self.assertTrue(read(self.root/'.viewer-queue/reconnect.json')['nonce'])
+  write(self.root/'.viewer-queue/bridge.json',dict(scope='account:workspace',connected=False,connection=dict(blocked=True,attempts=3)))
+  self.assertTrue(q.check_remote(cid)['blocked']);self.assertFalse(q.status()['bridges'][0]['connected'])
+ def test_retention_mode_changes_only_before_execution(self):
+  cid,_=self.chat();q=self.queue();q.enqueue([cid]);q.enqueue([cid],mode='preserve');self.assertEqual(q.rows()[0]['mode'],'preserve');row=self.run_queue(q)
+  with self.assertRaises(ValueError):q.enqueue([cid],mode='library')
+  self.assertEqual(q.rows()[0]['mode'],'preserve');self.receipt(row);q.tick();self.assertEqual(self.a.catalog()[0]['remote_state'],'deleted')
+ def test_scoped_heartbeat_expires_and_index_tombstone_imports(self):
+  cid,_=self.chat();q=self.queue();path=self.root/'.viewer-queue/bridge.json'
+  import time
+  write(path,dict(scope='account:workspace',connected=True,updated=time.time()));self.assertTrue(q.status()['bridges'][0]['connected'])
+  write(path,dict(scope='wrong',connected=True,updated=time.time()));self.assertFalse(q.status()['bridges'][0]['connected'])
+  write(path,dict(scope='account:workspace',connected=True,updated=time.time()-60));self.assertFalse(q.status()['bridges'][0]['connected'])
+  entry=read(self.root/'conversation-index.json')['entries'][0];entry.update(deletion_verified=True,remote_deleted_at=time.time()*1000);write(self.root/'conversation-index.json',dict(scope='account:workspace',entries=[entry]));self.a.register_manifest(entry,self.root/'conversation-index.json',self.root);self.assertEqual(self.a.catalog()[0]['remote_state'],'deleted')
  def test_restart_pauses_and_stop_keeps_jobs(self):
   cid,_=self.chat();q=self.queue();q.enqueue([cid]);row=self.run_queue(q);q.close();q=DeletionQueue(self.a,FileCatalog(self.a));self.q=q;self.assertEqual(q.rows()[0]['state'],'paused');self.assertFalse(read(self.root/'.viewer-queue/control.json')['enabled']);q.action('stop');self.assertEqual(len(q.rows()),1)
  def test_crash_during_backup_and_unavailable_control_folder(self):

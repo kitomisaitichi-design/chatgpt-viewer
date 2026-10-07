@@ -1,17 +1,27 @@
-# Offline Chat Viewer · v1.1.12
+# Offline Chat Viewer · v1.1.14
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.13-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.13/Offline-Chat-Viewer-v1.1.13-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.13/Offline-Chat-Viewer-v1.1.13-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.14-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.14/Offline-Chat-Viewer-v1.1.14-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.14/Offline-Chat-Viewer-v1.1.14-Windows.zip.sha256.txt)
 
 ## What the viewer does
 
 Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Normal reading and reversible Trash keep your exports intact. The optional reviewed deletion queue can remove a remote ChatGPT conversation and clean up its verified, unshared local Library copies.
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## Background connection and remote status · v1.1.14
+
+- A small dot and green **Connected** text in the status bar report a fresh, account-matched browser heartbeat. Disconnected and retry states remain visible. **Reconnect** resets the connection budget: one initial attempt and at most two retries, then automatic attempts stop until you reconnect manually. This budget persists across worker/page restarts. Shared ChatGPT rate-limit cooldown is separate and remains authoritative.
+- The upgraded optional exporter 2.4.12 adapter wakes an inactive worker page within about 30 seconds when its dashboard is closed and authorized local work is waiting. It reuses the remembered folder grant, signed-in ChatGPT browser session, existing exclusive dashboard lock and Engine pacing. An already-open exporter remains the owner. The browser must be running; initial adapter setup, folder permission and ChatGPT sign-in are still required. Reinstall the adapter from the queue setup, then reload the extension and ChatGPT tab once. `viewer-bridge-upgrade-v2.zip` preserves the previous adapter, manifest and service worker; the original rollback remains intact. No extra host permissions are added.
+- Queue-only execution skips archive inventories and Library discovery. A deferred conversation no longer blocks ready jobs behind it. The normal exporter still completes changed transcripts; revision mismatches require review rather than deleting a newer, unreviewed revision. Pause is checked during shared cooldown waits; an already-sent request may finish. Completed command files move to private queue history, keeping the bounded active inbox usable.
+- **Deleted on ChatGPT · local copy** marks verified deletion; **Unavailable on ChatGPT · local copy** marks an authenticated inaccessible lookup. Online/continue links hide in both states while local reading and attachment previews remain available. Opening an account-indexed chat queues a cached, non-destructive availability check, without archive rescans. A pre-existing 404 does not prove deletion and does not remove local Library files. Login failures, network errors, malformed responses and foreign-account receipts never become deletion markers. Status metadata stays separate from transcript content hashes.
+- Native Codex metadata discovery remains asynchronous and bodies load on opening; local Codex sessions do not enter the remote ChatGPT deletion queue.
+
+Verification: 255 backend tests (one local Windows symlink skip), five JavaScript renderer suites, 16 contract scenarios using the real exporter Engine with simulated HTTP, and isolated browser checks for connected/blocked/reconnect states, double-click protection, deleted/unavailable labels, local rendering and refresh. Authenticated deletion and background wake in a reloaded real extension have not been exercised; the browser automation cannot access Edge's internal extension reload page.
 
 ## Deletion queue, bookmarks and native Codex · v1.1.13
 
