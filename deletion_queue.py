@@ -190,6 +190,8 @@ class DeletionQueue:
                     state=db.execute('SELECT state FROM deletion_jobs WHERE id=?',(row['id'],)).fetchone()
                 if not state or state['state']!='preparing':continue
                 command['executor']='browser-v1' if self.browser.endpoint else 'legacy-exporter'
+                # Old exporter adapters must never execute the native owner's intent.
+                if self.browser.endpoint:command['schema']='offline-viewer/native-delete-v1'
                 if self.browser.endpoint:self.browser.configured(row['root'])
                 command['content_hash']=next((m.get('content_hash') for m in metadata if m.get('content_hash')),None)
                 write(Path(row['root'])/'.viewer-queue/commands'/(row['id']+'.json'),command)

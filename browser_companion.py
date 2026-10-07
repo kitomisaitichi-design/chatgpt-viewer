@@ -125,19 +125,22 @@ class BrowserCompanion:
         exporters = [c for c in self.clients.values() if c['kind'] == 'exporter' and c.get('key') == key and c['connected'] and now-c['updated'] < 20]
         if exporters:
             return client == min(exporters, key=lambda c: c['id'])['id']
-        # An old active adapter cannot coordinate leases. Wait for its upgrade.
+        # Native intents use a separate schema which old adapters cannot execute.
+        # Keep the compatibility guard only for the older extension companion.
         from deletion_queue import read
         for root, scope in self.queue.roots().items():
             bridge = read(root / '.viewer-queue/bridge.json')
-            if scope == key and not bridge.get('transport') and bridge.get('connected') and now-bridge.get('updated', 0) < 20:
+            if self.clients.get(client,{}).get('kind')!='native' and scope == key and not bridge.get('transport') and bridge.get('connected') and now-bridge.get('updated', 0) < 20:
                 return False
-        companions = [c for c in self.clients.values() if c['kind'] == 'companion' and c.get('key') == key and c['connected'] and now-c['updated'] < 45]
+        companions = [c for c in self.clients.values() if c['kind'] in ('native','companion') and c.get('key') == key and c['connected'] and now-c['updated'] < 45]
+        native = [c for c in companions if c['kind']=='native']
+        if native:companions=native
         return bool(companions) and client == min(companions, key=lambda c: c['id'])['id']
 
     def poll(self, data):
         with self.lock:
             ident = str(data.get('client', ''))
-            if not ident or len(ident) > 100 or data.get('kind') not in ('companion', 'exporter'):
+            if not ident or len(ident) > 100 or data.get('kind') not in ('native', 'companion', 'exporter'):
                 raise ValueError('Invalid browser client')
             scope = data.get('scope')
             key = scope_key(scope) if data.get('connected') is True else ''

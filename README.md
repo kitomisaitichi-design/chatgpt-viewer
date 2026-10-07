@@ -1,11 +1,11 @@
-# Offline Chat Viewer · v1.1.17
+# Offline Chat Viewer · v1.1.18
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.17-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.17/Offline-Chat-Viewer-v1.1.17-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.17/Offline-Chat-Viewer-v1.1.17-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.18-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.18/Offline-Chat-Viewer-v1.1.18-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.18/Offline-Chat-Viewer-v1.1.18-Windows.zip.sha256.txt)
 
 ## Quick start
 
@@ -14,7 +14,7 @@ A local ChatGPT-style reader for your Markdown and JSON exports. The standard vi
 3. Choose the complete ChatGPT Exporter backup folder, containing `json`, `markdown` and `attachments`. Saved chats and linked files load locally.
 4. Keep the old application folder until the update is working. Shared preferences migrate across versions; retain `.viewer-data` when updating in place.
 
-[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.17) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
+[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.18) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
 
 ## What the viewer does
 
@@ -22,9 +22,10 @@ Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex 
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
 
-## Independent connection and local Codex deletion · v1.1.17
+## One native Connect button · v1.1.18
 
-- **Exporter-free deletion:** the bundled Browser connection extension connects the viewer directly to your signed-in ChatGPT tab. An exporter installation or account index is not required. Queue intent is deduplicated by account and chat; browser credentials stay in ChatGPT. Initial connection plus two retries are persisted, then manual **Reconnect** is required.
+- **Native connection:** select **Connect** in the status bar. The viewer opens its own Windows ChatGPT sign-in window and remembers that private session across updates. No exporter, extension installation, pairing folder or existing browser profile is needed. **Sign in** reopens that same window; **Account** opens it after connection. A green dot and **Connected** require a fresh authenticated response, not just a running window.
+- **Bounded retries:** connection failures retry at most twice after the initial attempt, then stop until you select **Connect**. Sign-in waits for you rather than repeatedly requesting credentials. Server rate-limit waits remain separate and survive reconnects.
 - **One queue owner:** an active matching exporter dashboard can take over through the optional adapter and its existing scheduler. A durable request lease prevents parallel execution; deletion takes priority over discovery/Library work at scheduler boundaries. Shared pacing and Retry-After cooldowns survive reconnects. An uncertain mutation is checked before another deletion can be attempted.
 - **Review and recovery:** queueing never deletes immediately. **Run** requires the exact pending set. Complete Markdown, original JSON and available linked files are backed up before execution. The live conversation graph must match the saved JSON graph before deletion; newer revisions stop for review. An authenticated pre-existing 404 is labeled unavailable, not deleted. Verified deletion updates remote metadata and exporter tombstones separately from original content hashes. Local Library cleanup affects only verified unshared copies, with recovery retained.
 - **Native Codex:** queue local session removal independently of ChatGPT. Execution waits until Codex is closed. A verified private recovery copy remains readable, and stable session-ID exclusions prevent rediscovery across restarts/versions. Codex-owned databases are not edited. Keep the viewer running for deferred jobs to complete.
@@ -32,12 +33,11 @@ The standard reader and local backups work offline. An optional semantic search 
 
 ### Connect once
 
-1. In the viewer status bar select **Connect browser**, then **Open connection folder**.
-2. In Edge/Chrome Extensions, enable Developer mode and **Load unpacked** using that folder. It is already paired privately to this viewer; your archive and login tokens are not bundled or uploaded.
-3. Refresh a signed-in ChatGPT tab once, then select **Reconnect** in the viewer. A green dot indicates a fresh authenticated browser heartbeat. The extension and viewer must remain running for remote jobs.
-4. If using Exporter 2.4.12/2.4.13, expand **Optional exporter handoff**, choose its unpacked folder and **Enable handoff**, then reload that extension. The adapter adds loopback-only host permissions for this local transport and keeps rollback files.
+Select **Connect**, then sign in to ChatGPT in the native window. It hides after authentication; reopen it with the same **Account** button. Your usual browser can stay closed. Keep the viewer running for queued work. The native window uses Microsoft WebView2, normally present on Windows 10/11; if its runtime is missing, the actual startup error is shown.
 
-The extension's private generated folder lives under `.viewer-data/browser-connection-extension`; the public release contains only its unpaired source. Copy pairing in the setup is an optional fallback. Preserve `.viewer-data` and the shared preferences when upgrading. To roll back, stop the viewer, restore the previous app files and matching data backup, then reload the previous exporter adapter if used. Do not restore an old destructive queue as running.
+The private login profile lives in `%LOCALAPPDATA%\OfflineChatViewer\ChatGPTConnection`. It is excluded from exports and release ZIPs. Credentials stay in this native session; the local queue receives scoped results through an authenticated loopback transport. A compatible already-connected exporter dashboard can take over the existing exclusive queue lease internally. Obsolete exporter adapters cannot consume native commands through the legacy file inbox.
+
+Preserve `.viewer-data`, shared preferences and the native profile when upgrading. To roll back, stop the viewer and restore the previous app files and matching private data backup. Do not restore an old destructive queue as running. Source builds run `python scripts/vendor-native.py`; `powershell -File scripts/build-native.ps1` rebuilds the bundled helper on Windows. The Microsoft SDK package is pinned and hash-verified.
 
 ## Previous repair · v1.1.16
 
@@ -48,10 +48,10 @@ The optional exporter bridge no longer marks a folder ready before its metadata 
 | Read and preview | Markdown, saved branches, LaTeX, tables, charts, code, images, PDF, Word and spreadsheets; read-only linked attachment pane. |
 | Organize and search | Independent type filters and ordering, projects/folders, pins, bookmarks, aliases, colours, reversible Trash, text search. |
 | Back up and mirror | Select JSON, Markdown, images and other files; linked indexes and SHA-256; full/progress ZIP slots, asynchronous capture/queue and Drive for desktop delivery. Google Drive performs the cloud sync. |
-| Connect and queue | Green connection dot, initial attempt plus two retries then manual Reconnect; reviewed ChatGPT deletion through the independent viewer connection, with exclusive exporter handoff when available. |
+| Connect and queue | One native Connect button, green authenticated connection dot, initial attempt plus two retries then manual Connect; reviewed ChatGPT deletion with exclusive exporter handoff when available. |
 | Keep local history | Native Codex sessions load asynchronously. Verified deleted/unavailable ChatGPT chats keep distinct local-copy labels and remain readable. |
 
-Remote actions need a signed-in ChatGPT browser tab and the bundled viewer Browser connection extension, or the optional matching exporter adapter. Remote Library deletion is unsupported. Live authenticated deletion is not exercised by the automated checks; those checks use simulated HTTP.
+Remote actions need a signed-in session in the viewer's native window. Remote Library deletion is unsupported. The actual Windows WebView2 runtime and asynchronous native bridge were checked locally; authenticated sign-in and personal remote deletion have not been exercised. Queue regressions use simulated HTTP. Historical version notes below describe older connection flows.
 
 ## First connection setup · v1.1.15
 
@@ -342,6 +342,7 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 
 | Version | Recorded changes |
 | --- | --- |
+| **1.1.18** | One native Connect button; app-owned Windows ChatGPT sign-in window with persistent private session; no browser extension or pairing setup; native queue ownership fenced from obsolete exporter adapters. |
 | **1.1.17** | Independent browser connection; exclusive exporter handoff; reviewed deletion queue, revision checks and recovery; deferred native Codex deletion with rediscovery exclusions; native ChatGPT Projects grouping. |
 | **1.1.16** | Exporter heartbeat folder/metadata invariant repair, null-context recovery, corrected optional adapter and release instructions. |
 | **1.1.15** | First-setup missing folder-handle repair; background queue ownership and persisted connection retry budget retained. |

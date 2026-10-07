@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.1.17
+OFFLINE CHAT VIEWER v1.1.18
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
@@ -122,11 +122,15 @@ restart. Cancel work & retries pauses delivery; Retry saved ZIP delivery resumes
 Automatic backups can also follow settled exporter manifest updates, using the
 same idle and power choices. Google Drive for desktop handles the cloud sync.
 
-BROWSER CONNECTION AND DELETION
-Connect browser in the bottom status bar opens the private, pre-paired extension
-folder. Load that folder using Edge or Chrome Extensions > Developer mode >
-Load unpacked, then refresh a signed-in ChatGPT tab. No exporter is required.
-If using the optional exporter adapter, reload its extension and dashboard too.
+NATIVE CONNECTION AND DELETION
+Click Connect in the bottom status bar. Sign in to ChatGPT in the viewer's own
+Windows window. It remembers this private session across versions; no exporter,
+browser extension or pairing setup is needed. Sign in / Account reopens the same
+window. Connected with a green dot means a fresh authenticated response.
+Failed connections retry twice, then wait for you to click Connect again.
+The native window requires Microsoft WebView2, normally present on Windows 10/11.
+Your login profile stays in LOCALAPPDATA/OfflineChatViewer/ChatGPTConnection,
+outside exports and release ZIPs. Keep the viewer running for remote queue work.
 Select chats, choose retention, then review and Run the deletion queue. Nothing
 is remotely deleted merely by adding a chat. JSON recovery must match ChatGPT.
 Native Codex deletions wait for Codex to close and retain recovery transcripts.

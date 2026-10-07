@@ -40,6 +40,8 @@ class BrowserQueue(unittest.TestCase):
 
     def test_no_exporter_required_and_one_lease(self):
         row=self.run_job();self.assertEqual(row['scope'],scope_key(self.client['scope']))
+        command=read(Path(row['root'])/'.viewer-queue/commands'/(row['id']+'.json'))
+        self.assertEqual(command['schema'],'offline-viewer/native-delete-v1')
         req=self.request();self.assertEqual(req['phase'],'preflight')
         self.assertIsNone(self.q.browser.poll(self.client).get('request'))
         self.assertFalse(self.q.browser.permit(dict(req,client='wrong'))['allowed'])
@@ -51,6 +53,16 @@ class BrowserQueue(unittest.TestCase):
         self.result(req,dict(ok=False,status=404));self.q.tick()
         self.assertEqual(self.q.rows()[0]['state'],'confirmed');self.assertEqual(self.a.catalog()[0]['remote_state'],'deleted');self.assertTrue(self.path.exists())
         with self.assertRaises(ValueError):self.result(req,dict(ok=False,status=404))
+
+    def test_native_owner_precedes_extension_but_matching_exporter_can_handoff(self):
+        self.run_job();native=dict(self.client,client='native-owner',kind='native',heartbeat=True)
+        self.q.browser.poll(native)
+        self.assertIsNone(self.request())
+        native['heartbeat']=False;req=self.request(native);self.assertIsNotNone(req)
+        self.q.browser.result(dict(client='native-owner',**req,result=dict(ok=True,status=200,data=self.body)))
+        exporter=dict(self.client,client='exporter-owner',kind='exporter',heartbeat=True)
+        self.q.browser.poll(exporter);self.assertIsNone(self.request(native))
+        exporter['heartbeat']=False;self.assertIsNotNone(self.request(exporter))
 
     def test_revision_change_stops_before_delete(self):
         row=self.run_job();req=self.request();changed=copy.deepcopy(self.body);changed['mapping']['a']['message']['content']['parts']=['New reply']

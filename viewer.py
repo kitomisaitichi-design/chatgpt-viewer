@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.17'
+VERSION = '1.1.18'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -1203,7 +1203,8 @@ class Server(ThreadingHTTPServer):
         from deletion_queue import DeletionQueue
         self.deletions=DeletionQueue(archive,self.files)
         self.deletions.browser.endpoint='http://127.0.0.1:'+str(self.server_port)
-        self.deletions.browser.prepare_extension()
+        from native_connection import NativeConnection
+        self.native_connection=NativeConnection(self.deletions.browser)
         for root in self.deletions.roots():self.deletions.browser.configured(root)
         self.deletions.start()
         self.native.deletion_queue.start()
@@ -1212,7 +1213,7 @@ class Server(ThreadingHTTPServer):
         value=self.deletions.status();catalog=dict(self.archive.ui_cache['chats']) if self.archive.ui_cache else {c['id']:c for c in self.archive.catalog()}
         for row in self.native.deletion_queue.rows():
             value['jobs'].append(dict(row,cid=row['session_id'],local=True,title=catalog.get(row['session_id'],{}).get('alias') or catalog.get(row['session_id'],{}).get('title') or row['session_id'],message='Waiting until Codex is closed' if row['state']=='waiting' else '',remote_state='local-removed' if row['state']=='confirmed' else ''))
-        value['jobs'].sort(key=lambda r:(r['created'],r['id']));return value
+        value['jobs'].sort(key=lambda r:(r['created'],r['id']));value['native_connection']=self.native_connection.status();return value
     def queue_add(self,ids,mode):
         if not isinstance(ids,list) or not 0<len(ids)<=1000:raise ValueError('Select between 1 and 1000 chats')
         with self.queue_lock:
@@ -1234,6 +1235,7 @@ class Server(ThreadingHTTPServer):
             if local:self.native.deletion_queue.action(action,local)
             return self.deletion_status()
     def server_close(self):
+        if hasattr(self,'native_connection'):self.native_connection.close()
         if hasattr(self,'native'):self.native.close()
         if hasattr(self,'deletions'):self.deletions.close()
         super().server_close()
@@ -1472,7 +1474,7 @@ class Handler(BaseHTTPRequestHandler):
                 folder=Path(self.server.deletions.browser.setup()['folder'])
                 if os.name=='nt':os.startfile(str(folder))
                 self.send({'path':str(folder)});return
-            elif self.path=='/api/connection/reconnect':self.send(self.server.deletions.reconnect());return
+            elif self.path in ('/api/connection/connect','/api/connection/reconnect'):self.send(self.server.native_connection.connect());return
             elif self.path=='/api/delete-queue/add':self.send(self.server.queue_add(d.get('ids'),d.get('mode','library')));return
             elif self.path=='/api/delete-queue/action':self.send(self.server.queue_action(d.get('action'),d.get('ids')));return
             elif self.path=='/api/delete-queue/install-bridge':

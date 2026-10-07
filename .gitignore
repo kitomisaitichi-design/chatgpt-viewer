@@ -5,5 +5,7 @@ __pycache__/
 Backups/
 dist/
 VIEWER-DIAGNOSTICS.json
+runtime/native/*.dll
+runtime/native/Microsoft-WebView2-LICENSE.txt
 web/vendor/documents/**
 !web/vendor/documents/manifest.json

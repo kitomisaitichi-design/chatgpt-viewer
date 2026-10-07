@@ -24,6 +24,8 @@ jobs:
           git checkout --detach FETCH_HEAD
       - name: Prepare pinned offline document renderers
         run: python3 scripts/vendor-documents.py
+      - name: Prepare pinned native connection SDK
+        run: python3 scripts/vendor-native.py
       - name: Run backend tests
         run: |
           python3 --version

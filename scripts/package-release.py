@@ -11,9 +11,17 @@ for name,digest in vendors['files'].items():
  relative='web/vendor/documents/'+name
  if hashlib.sha256((root/relative).read_bytes()).hexdigest()!=digest:raise ValueError('Missing/changed offline renderer: '+name)
  paths.append(relative)
+native=json.loads((root/'integration/native-connection/vendor.json').read_text())
+for name,digest in native['files'].items():
+ relative='runtime/native/'+name
+ if hashlib.sha256((root/relative).read_bytes()).hexdigest()!=digest:raise ValueError('Missing/changed native runtime: '+name)
+ paths.append(relative)
+helper=json.loads((root/'integration/native-connection/helper.json').read_text())
+if hashlib.sha256((root/'runtime/native/NativeConnect.exe').read_bytes()).hexdigest()!=helper['sha256']:raise ValueError('Native helper differs from its manifest')
+if hashlib.sha256((root/'integration/native-connection/NativeConnect.cs').read_bytes().replace(b'\r\n',b'\n')).hexdigest()!=helper['source_sha256']:raise ValueError('Native helper source changed without rebuilding')
 paths=sorted({p for p in paths if p and p!='.gitignore' and not p.startswith(('.github/','tests/','scripts/','release-notes/'))})
 name=f'Offline-Chat-Viewer-v{version}-Windows.zip';target=out/name
-for required in ['viewer.py','thread_images.py','web/thread-images.js','web/document-cards.js','web/media.css','library_files.py','START-VIEWER.bat','runtime/python.exe','runtime/python313.zip','web/files.js','web/files.css']:
+for required in ['viewer.py','native_connection.py','runtime/native/NativeConnect.exe','thread_images.py','web/thread-images.js','web/document-cards.js','web/media.css','library_files.py','START-VIEWER.bat','runtime/python.exe','runtime/python313.zip','web/files.js','web/files.css']:
  if required not in paths:raise ValueError('Missing portable file: '+required)
 with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
  for relative in paths:
