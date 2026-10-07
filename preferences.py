@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from atomic_files import atomic_bytes
 
-FIELDS = ('category', 'pinned', 'position', 'alias', 'trashed', 'color', 'sticky')
+FIELDS = ('category', 'pinned', 'position', 'alias', 'trashed', 'color', 'sticky', 'bookmarked', 'kind_override')
 
 def profile_path():
     base = Path(os.environ.get('LOCALAPPDATA') or (Path.home()/'.local/share'))

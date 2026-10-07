@@ -68,7 +68,7 @@ class ThreadImages:
                     candidates=aliases.get(ref) or aliases.get(opaque) or aliases.get(opaque.rsplit('/',1)[-1]) or []
                     if len(candidates)==1:file=candidates[0]
                 if file:target=file['target']
-                elif not re.match(r'^(?:[a-z][\w+.-]*:|//)',ref,re.I):
+                elif raw.get('product')=='codex' or not re.match(r'^(?:[a-z][\w+.-]*:|//)',ref,re.I):
                     try:target=a.asset(cid,ref,indexed=False)
                     except (ValueError,OSError):pass
                 if target and self.extensions is not None and target.suffix.lower() not in self.extensions:return

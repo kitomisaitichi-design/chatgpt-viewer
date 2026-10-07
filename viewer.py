@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.12'
+VERSION = '1.1.13'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -258,7 +258,7 @@ def parse_json(data,path,leaf=None):
     kind,evidence=signal or ('chat','No saved Work/Codex product marker')
     project=data.get('project') or ''
     if isinstance(project,dict):project=project.get('title') or project.get('name') or ''
-    return dict(id=cid,title=data.get('title') or path.stem,created=epoch(data.get('create_time')),updated=epoch(data.get('update_time')),kind=kind,kind_evidence=evidence,project=project,pinned=bool(data.get('is_starred') or data.get('pinned_time')),url=data.get('url') or ('' if cid.startswith('local-') else 'https://chatgpt.com/c/'+urllib.parse.quote(cid)),messages=messages)
+    return dict(id=cid,title=data.get('title') or path.stem,created=epoch(data.get('create_time')),updated=epoch(data.get('update_time')),kind=kind,kind_evidence=evidence,project=project,pinned=bool(data.get('is_starred') or data.get('pinned_time')),url=data.get('url') or ('' if kind=='codex' or cid.startswith('local-') else 'https://chatgpt.com/c/'+urllib.parse.quote(cid)),messages=messages)
 
 def infer_id(path):
     m=re.search(r'([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})',path.stem,re.I)
@@ -322,7 +322,7 @@ class Archive:
             CREATE TABLE IF NOT EXISTS vectors(cid TEXT,seq INTEGER,part INTEGER,hash TEXT,vector BLOB,PRIMARY KEY(cid,seq,part));
             ''')
             organization_columns={r['name'] for r in db.execute('PRAGMA table_info(organization)')}
-            for name,definition in (('trashed','INTEGER DEFAULT 0'),('color',"TEXT DEFAULT ''"),('sticky','INTEGER DEFAULT 0')):
+            for name,definition in (('trashed','INTEGER DEFAULT 0'),('color',"TEXT DEFAULT ''"),('sticky','INTEGER DEFAULT 0'),('bookmarked','INTEGER DEFAULT 0'),('kind_override',"TEXT DEFAULT ''")):
                 if name not in organization_columns:db.execute('ALTER TABLE organization ADD COLUMN '+name+' '+definition)
             columns={r['name'] for r in db.execute('PRAGMA table_info(messages)')}
             if 'extras' not in columns:db.execute("ALTER TABLE messages ADD COLUMN extras TEXT DEFAULT '{}'")
@@ -412,12 +412,20 @@ class Archive:
         self.live_sources[c['id']]=c
     def publish_sources(self,sources,coverage=None):
         if self.ui_cache is None:return
+        with self.ui_cache_lock:new_ids={c['id'] for c in sources if c['id'] not in self.ui_cache['chats']}
+        organization={}
+        if new_ids:
+            with self.connect() as db:
+                for cid in new_ids:
+                    row=db.execute('SELECT * FROM organization WHERE cid=?',(cid,)).fetchone()
+                    if row:organization[cid]={k:row[k] for k in ORGANIZATION_FIELDS}
         with self.ui_cache_lock:
             changed=False
             for c in sources:
                 old=self.ui_cache['chats'].get(c['id'],{})
                 if old.get('path','').lower().endswith('.json') and c.get('path','').lower().endswith('.md') and Path(old['path']).is_file():continue
-                merged={**dict(category='',pinned=0,position=0,alias='',trashed=0,color='',sticky=0),**old,**c}
+                merged={**dict(category='',pinned=0,position=0,alias='',trashed=0,color='',sticky=0,bookmarked=0,kind_override=''),**old,**c}
+                if not old:merged.update(organization.get(c['id'],{}))
                 if old.get('loaded') and not c.get('loaded') and old.get('path')==c.get('path') and (not c.get('fingerprint') or old.get('fingerprint')==c.get('fingerprint')):
                     merged.update(loaded=True,count=old.get('count',0),fingerprint=old.get('fingerprint',''))
                 if merged!=old:self.ui_cache['chats'][c['id']]=merged;self.ui_row_revisions[c['id']]=self.ui_cache['revision']+1;changed=True
@@ -433,7 +441,7 @@ class Archive:
     def foreground_page(self,cid,*args):
         if self.ui_cache is not None:
             with self.ui_cache_lock:c=self.ui_cache['chats'].get(cid)
-            if c and Path(c['path']).is_file() and Path(c['path']).suffix.lower() in ('.md','.json'):
+            if c and Path(c['path']).is_file() and Path(c['path']).suffix.lower() in ('.md','.json','.jsonl'):
                 stat=Path(c['path']).stat()
                 if c.get('loaded') and c.get('fingerprint')==str(stat.st_mtime_ns)+':'+str(stat.st_size):return self.page(cid,*args)
                 return self.read_source_page(cid,c['path'],*args)
@@ -605,15 +613,15 @@ class Archive:
         if self.profile:self.profile.update(settings=values)
     def catalog(self):
         with self.connect() as db:
-            ready=[dict(dict(r),loaded=True) for r in db.execute("SELECT c.*,COALESCE(o.category,'') category,COALESCE(o.pinned,0) pinned,COALESCE(o.position,0) position,COALESCE(o.alias,'') alias,COALESCE(o.trashed,0) trashed,COALESCE(o.color,'') color,COALESCE(o.sticky,0) sticky FROM chats c LEFT JOIN organization o ON c.id=o.cid")]
+            ready=[dict(dict(r),loaded=True) for r in db.execute("SELECT c.*,COALESCE(o.category,'') category,COALESCE(o.pinned,0) pinned,COALESCE(o.position,0) position,COALESCE(o.alias,'') alias,COALESCE(o.trashed,0) trashed,COALESCE(o.color,'') color,COALESCE(o.sticky,0) sticky,COALESCE(o.bookmarked,0) bookmarked,COALESCE(o.kind_override,'') kind_override FROM chats c LEFT JOIN organization o ON c.id=o.cid")]
             ids={r['id'] for r in ready};organization={r['cid']:dict(r) for r in db.execute('SELECT * FROM organization')}
             for r in db.execute('SELECT * FROM manifest_entries WHERE available=1'):
                 if r['cid'] in ids:continue
                 m=json.loads(r['metadata']);ids.add(r['cid'])
-                ready.append(dict(id=r['cid'],title=m.get('title') or Path(r['path']).stem,url=m.get('url') or 'https://chatgpt.com/c/'+r['cid'],
+                ready.append(dict(id=r['cid'],title=m.get('title') or Path(r['path']).stem,url=m.get('url') or ('' if (surface_signal(m) or ('',))[0]=='codex' else 'https://chatgpt.com/c/'+r['cid']),
                     created=epoch(m.get('create_time')),updated=epoch(m.get('update_time')),kind=(surface_signal(m) or (canonical_kind(m.get('chat_kind') or m.get('chatKind')),))[0],kind_evidence=m.get('kind_evidence') or (surface_signal(m) or ('','No saved Work/Codex product marker'))[1],
                     project=m.get('project') if isinstance(m.get('project'),str) else '',path=r['path'],fingerprint='',count=0,folder=str(Path(r['path']).parent),
-                    category='',pinned=0,position=0,alias='',trashed=0,color='',sticky=0,loaded=False))
+                    category='',pinned=0,position=0,alias='',trashed=0,color='',sticky=0,bookmarked=0,kind_override='',loaded=False))
                 ready[-1].update({k:organization.get(r['cid'],{}).get(k,ready[-1][k]) for k in ORGANIZATION_FIELDS})
             return ready
     def coverage(self):
@@ -643,16 +651,18 @@ class Archive:
             old=db.execute('SELECT metadata,path,available FROM manifest_entries WHERE cid=? AND manifest=?',(cid,str(manifest))).fetchone()
             if old and tuple(old)==(metadata,path,int(available)):return
             db.execute('INSERT OR REPLACE INTO manifest_entries VALUES(?,?,?,?,?)',(cid,str(manifest),metadata,path,int(available)))
+            if entry.get('deletion_verified') and entry.get('remote_deleted_at'):db.execute('INSERT OR IGNORE INTO organization(cid,trashed) VALUES(?,1)',(cid,))
         self.revision+=1
         if available and not self.live_sources.get(cid,{}).get('loaded'):
-            self.live_sources[cid]=dict(id=cid,title=entry.get('title') or Path(path).stem,url=entry.get('url') or 'https://chatgpt.com/c/'+cid,created=epoch(entry.get('create_time')),updated=epoch(entry.get('update_time')),kind=signal[0] if signal else 'chat',kind_evidence=signal[1] if signal else 'No saved Work/Codex product marker',project=entry.get('project') if isinstance(entry.get('project'),str) else '',path=path,fingerprint='',count=0,folder=str(Path(path).parent.relative_to(root)),loaded=False)
+            self.live_sources[cid]=dict(id=cid,title=entry.get('title') or Path(path).stem,url=entry.get('url') or ('' if signal and signal[0]=='codex' else 'https://chatgpt.com/c/'+cid),created=epoch(entry.get('create_time')),updated=epoch(entry.get('update_time')),kind=signal[0] if signal else 'chat',kind_evidence=signal[1] if signal else 'No saved Work/Codex product marker',project=entry.get('project') if isinstance(entry.get('project'),str) else '',path=path,fingerprint='',count=0,folder=str(Path(path).parent.relative_to(root)),loaded=False)
 
     @staticmethod
     def organization_values(values):
         result={k:values[k] for k in ORGANIZATION_FIELDS if k in values}
-        for key in ('trashed','sticky','pinned'):
+        for key in ('trashed','sticky','pinned','bookmarked'):
             if key in result:result[key]=int(bool(result[key]))
         if 'color' in result and result['color'] and not re.fullmatch(r'#[a-fA-F0-9]{6}',str(result['color'])):raise ValueError('Choose a valid chat color.')
+        if 'kind_override' in result and result['kind_override'] not in ('','chat','work','codex'):raise ValueError('Choose Chat, Work, Codex, or automatic.')
         for key in ('alias','category'):
             if key in result:result[key]=str(result[key] or '')[:500]
         return result
@@ -877,7 +887,7 @@ class Archive:
         if self.ui_cache is not None and cid in self.ui_cache['chats']:r={'path':self.ui_cache['chats'][cid]['path']}
         else:
             with self.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(cid,cid)).fetchone()
-        if not r or Path(r['path']).suffix.lower()!='.json':return {},None
+        if not r or Path(r['path']).suffix.lower() not in ('.json','.jsonl'):return {},None
         path=Path(r['path']);return self.source_reader.raw(cid,path),path
     def choose_version(self,cid,target):
         d,path=self.source_data(cid);mp,children,_=graph_context(d)
@@ -1020,6 +1030,20 @@ class Archive:
             with self.connect() as db:r=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? AND available=1 LIMIT 1',(cid,cid)).fetchone()
         if not r:raise FileNotFoundError('Unknown conversation')
         p=Path(r['path']);rel=urllib.parse.unquote(relative).replace('\\','/')
+        if p.suffix.lower()=='.jsonl':
+            from native_codex import local_references, reference_path
+            raw=self.source_reader.raw(cid,p);refs=local_references(raw)
+            target=reference_path(relative)
+            if not target.is_absolute():target=p.parent/target
+            target=target.resolve()
+            allowed=[]
+            for ref in refs:
+                try:
+                    candidate=reference_path(ref)
+                    allowed.append((candidate if candidate.is_absolute() else p.parent/candidate).resolve())
+                except ValueError:continue
+            if target not in allowed or not target.is_file():raise FileNotFoundError('File is not explicitly linked by this native Codex session.')
+            return target
         if rel.startswith(('http:','https:','data:','javascript:','file:')):raise ValueError('Only exported local files can be opened here.')
         roots=[p.parent]
         imports=self.data_dir/'imports'
@@ -1164,6 +1188,13 @@ class Server(ThreadingHTTPServer):
         self.images=ThreadImages(archive,self.files)
         from thread_attachments import ThreadAttachments
         self.attachments=ThreadAttachments(archive,self.files)
+        from native_codex import NativeCodex
+        self.native=NativeCodex(archive)
+        from deletion_queue import DeletionQueue
+        self.deletions=DeletionQueue(archive,self.files);self.deletions.start()
+    def server_close(self):
+        if hasattr(self,'deletions'):self.deletions.close()
+        super().server_close()
     def transfer_status(self):
         with self.transfer_lock:
             active=[dict(r,elapsed_ms=round((time.monotonic()-r['started'])*1000)) for r in self.transfers.values()]
@@ -1223,6 +1254,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(b'',302,'text/plain',{'Location':'/','Set-Cookie':self.server.cookie_name+'='+self.server.token+'; HttpOnly; SameSite=Strict; Path=/'});return
             if not self.authorized():self.send({'error':'Open the viewer using START-VIEWER.bat to establish a local session.'},403);return
             a=self.server.archive
+            if url.path=='/api/delete-queue':self.send(self.server.deletions.status());return
+            if url.path=='/api/codex/status':self.send(self.server.native.status());return
             if url.path=='/api/backup/detect':
                 from folder_tools import quick_setup
                 self.send(quick_setup(a.settings(),APP,refresh=q.get('refresh')=='1'));return
@@ -1290,7 +1323,7 @@ class Handler(BaseHTTPRequestHandler):
                 scope=None
                 if q.get('include_trash')!='1':
                     overrides=a.settings().get('kindOverrides') or {}
-                    scope={c['id'] for c in a.catalog() if not c.get('trashed') and (q.get('type','all')=='all' or canonical_kind(overrides.get(c['id']) or c['kind'])==q['type']) and (q.get('category','all')=='all' or (c.get('category') or '')==q['category'])}
+                    scope={c['id'] for c in a.catalog() if not c.get('trashed') and (q.get('type','all')=='all' or canonical_kind(c.get('kind_override') or overrides.get(c['id']) or c['kind'])==q['type']) and (q.get('category','all')=='all' or (c.get('category') or '')==q['category'])}
                 result=a.search(q.get('q',''),q.get('mode','smart'),q.get('id'),scope)
                 with a.connect() as db:
                     for hit in result['results']:
@@ -1371,6 +1404,14 @@ class Handler(BaseHTTPRequestHandler):
                     root=tk.Tk();root.withdraw();root.attributes('-topmost',True);folder=filedialog.askdirectory(title='Choose your exported chats folder',initialdir=d.get('path') or str(APP));root.destroy()
                 self.send({'path':folder});return
             elif self.path=='/api/settings':a.save_settings(d)
+            elif self.path=='/api/delete-queue/add':self.send(self.server.deletions.enqueue(d.get('ids'),d.get('mode','library')));return
+            elif self.path=='/api/delete-queue/action':self.send(self.server.deletions.action(d.get('action'),d.get('ids')));return
+            elif self.path=='/api/delete-queue/install-bridge':
+                import importlib.util
+                spec=importlib.util.spec_from_file_location('viewer_exporter_install',APP/'integration/install-exporter-bridge.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+                message=module.install(d.get('path',''));a.save_settings({'exporterBridgeFolder':str(Path(d['path']).resolve())});self.send({'message':message});return
+            elif self.path=='/api/codex/discover':
+                a.save_settings({'nativeCodexEnabled':True});self.send(self.server.native.start());return
             elif self.path=='/api/backup/config':self.send(self.server.backup.save_config(d));return
             elif self.path=='/api/backup/open-local':self.send(self.server.backup.open_local(d.get('path')));return
             elif self.path=='/api/backup/client':self.send(self.server.backup.drive.configure(d));return
@@ -1416,6 +1457,7 @@ def main():
     a.enable_ui_cache();root=args.root if args.root!=str(APP) else settings.get('scan_start',args.root);up=args.up if args.up is not None else settings.get('scan_up',2)
     server=Server(('127.0.0.1',args.port),a);url=f'http://127.0.0.1:{server.server_port}/?token={server.token}'
     server.backup.start_scheduler()
+    if not args.isolated and settings.get('nativeCodexEnabled',True):server.native.start()
     (a.data_dir/'session.json').write_text(json.dumps({'url':url,'pid':os.getpid()}))
     print('Offline Chat Viewer is running. Close this window to stop.\n'+url,flush=True)
     if not settings.get('scanPaused') and (settings.get('scan_start') or args.root!=str(APP)):a.request_scan(root,up)
@@ -1429,6 +1471,6 @@ def main():
     if not args.no_browser:threading.Thread(target=webbrowser.open,args=(url,),daemon=True).start()
     try:server.serve_forever()
     except KeyboardInterrupt:pass
-    finally:server.backup.close();a.close();server.server_close()
+    finally:server.deletions.close();server.backup.close();a.close();server.server_close()
 
 if __name__=='__main__':main()

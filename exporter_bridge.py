@@ -50,7 +50,7 @@ def read_metadata(path):
         after=path.stat()
         if (after.st_size,after.st_mtime_ns)!=(stat.st_size,stat.st_mtime_ns):raise ValueError(path.name+' changed while reading. Retry after the exporter finishes saving.')
         if isinstance(data,dict):
-            data={**{k:data[k] for k in ('schema','version','library') if k in data},'entries':data.get('entries',[]) if data.get('schema')=='chatgpt-library-index/v1' else entries(data)}
+            data={**{k:data[k] for k in ('schema','version','library','scope','scope_key') if k in data},'entries':data.get('entries',[]) if data.get('schema')=='chatgpt-library-index/v1' else entries(data)}
         for old in list(_metadata_cache):
             if old[0]==key[0]:del _metadata_cache[old]
         _metadata_cache[key]=data

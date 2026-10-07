@@ -14,13 +14,30 @@ class IndexedRows(list):
         self.visible_sequences=[m['seq'] for m in self.visible]
 
 def native_conversation(text,path):
-    records=[json.loads(line) for line in text.splitlines() if line.strip()]
+    from native_codex import session_header
+    session_header(path)
+    records=[];lines=text.splitlines(keepends=True)
+    for i,line in enumerate(lines):
+        if not line.strip():continue
+        try:records.append(json.loads(line))
+        except ValueError:
+            # An active session can have one incomplete trailing write, never a bad interior row.
+            if i==len(lines)-1 and not line.endswith('\n'):break
+            raise
     session=next((r.get('payload') or {} for r in records if isinstance(r,dict) and r.get('type')=='session_meta'),{})
-    conv={'id':session.get('id'),'title':session.get('title') or Path(path).stem,'product':'codex','create_time':session.get('timestamp'),'messages':[]}
+    conv={'id':session.get('id'),'title':session.get('title') or Path(path).stem,'product':'codex','url':'','create_time':session.get('timestamp'),'update_time':Path(path).stat().st_mtime,'messages':[]}
     for r in records:
         if not isinstance(r,dict) or r.get('type')!='response_item':continue
         payload=r.get('payload') or {};role=payload.get('role')
-        if role:conv['messages'].append({'role':role,'channel':payload.get('channel',''),'text':'\n'.join(x.get('text','') for x in payload.get('content',[]) if isinstance(x,dict)),'create_time':r.get('timestamp')})
+        if role:
+            parts=[]
+            for part in payload.get('content',[]):
+                if not isinstance(part,dict):continue
+                if isinstance(part.get('text'),str):parts.append(part['text'])
+                elif part.get('type') in ('input_image','image','local_image'):
+                    ref=part.get('image_url') or part.get('path') or part.get('url')
+                    if isinstance(ref,str):parts.extend([{'content_type':'image_asset_pointer','asset_pointer':ref},'![Saved image](<'+ref+'>)'])
+            conv['messages'].append({'role':role,'channel':payload.get('channel') or payload.get('phase',''),'content':{'content_type':'multimodal_text','parts':parts},'create_time':r.get('timestamp')})
     return conv
 
 class SourceReader:
