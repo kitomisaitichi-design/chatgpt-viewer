@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.1.7
+OFFLINE CHAT VIEWER v1.1.8
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
@@ -107,3 +107,11 @@ Copy existing ZIPs to Drive verifies completed local ZIPs without rescanning.
 Google Drive for desktop handles the cloud upload; check its sync status.
 
 Drag the sidebar edge to resize; double-click to reset. Its width is saved.
+
+VERSION 1.1.8
+Compatible with Exporter 2.4.10 nested backups and Library-only exports.
+Both ZIPs finish locally before copying to Drive. Failed delivery stays queued
+for a verified retry without rescanning the source. Queue/retry state survives
+restart. Cancel work & retries pauses delivery; Retry saved ZIP delivery resumes.
+Automatic backups can also follow settled exporter manifest updates, using the
+same idle and power choices. Google Drive for desktop handles the cloud sync.

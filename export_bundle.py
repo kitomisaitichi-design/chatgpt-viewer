@@ -3,7 +3,7 @@ import csv,html,io,json,os,re,urllib.parse
 from collections import defaultdict
 from pathlib import Path
 from discovery import SKIP_LOWER,iter_documents
-from exporter_bridge import entries as exporter_entries
+from exporter_bridge import entries as exporter_entries,read_metadata
 
 ASSET_DIRS={'attachments','files','images','downloads','assets'}
 META={'conversation-index.json','portable-state.json','export-report.json','viewer-handoff.json'}
@@ -105,9 +105,8 @@ def conversation_map(root,files,catalog):
         name=Path(path).name.lower()
         if name not in ('conversation-index.json','viewer-handoff.json','library-index.json') and 'portable-state' not in name:continue
         manifest=root/path
-        if manifest.stat().st_size>32*1024**2:continue
         try:
-            data=json.loads(manifest.read_text(encoding='utf-8-sig'))
+            data=read_metadata(manifest)
             if not isinstance(data,dict):continue
             library=data.get('entries',[]) if name=='library-index.json' else data.get('library',[])
             base=manifest.parent.parent if name=='library-index.json' else manifest.parent

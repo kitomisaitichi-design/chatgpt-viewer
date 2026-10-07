@@ -37,10 +37,27 @@ def entries(data):
             if entry:merged[entry['id']]={**merged.get(entry['id'],{}),**entry}
     return list(merged.values())
 
-def read_index(path):
-    path=Path(path)
-    if path.stat().st_size>32*1024**2:raise ValueError('Exporter metadata exceeds the 32 MB limit.')
-    return entries(json.loads(path.read_text(encoding='utf-8-sig')))
+META_LIMIT=128*1024**2
+_metadata_cache=OrderedDict();_metadata_lock=threading.RLock()
+
+def read_metadata(path):
+    """Share fingerprinted metadata only; do not retain exporter logs/job internals."""
+    path=Path(path);stat=path.stat();key=(str(path.resolve()),stat.st_size,stat.st_mtime_ns)
+    if stat.st_size>META_LIMIT:raise ValueError('Exporter metadata exceeds the 128 MiB limit.')
+    with _metadata_lock:
+        if key in _metadata_cache:_metadata_cache.move_to_end(key);return _metadata_cache[key]
+        data=json.loads(path.read_text(encoding='utf-8-sig'))
+        after=path.stat()
+        if (after.st_size,after.st_mtime_ns)!=(stat.st_size,stat.st_mtime_ns):raise ValueError(path.name+' changed while reading. Retry after the exporter finishes saving.')
+        if isinstance(data,dict):
+            data={**{k:data[k] for k in ('schema','version','library') if k in data},'entries':data.get('entries',[]) if data.get('schema')=='chatgpt-library-index/v1' else entries(data)}
+        for old in list(_metadata_cache):
+            if old[0]==key[0]:del _metadata_cache[old]
+        _metadata_cache[key]=data
+        while len(_metadata_cache)>1 and (len(_metadata_cache)>4 or sum(k[1] for k in _metadata_cache)>META_LIMIT):_metadata_cache.popitem(last=False)
+        return data
+
+def read_index(path):return entries(read_metadata(path))
 
 def timestamp(value):
     try:
@@ -81,32 +98,46 @@ def attachment_records(entry,root):
         result.append(dict(id=str(item.get('id') or item.get('file_id') or ''),name=str(item.get('name') or (path.name if path else 'Saved file')),path=str(path) if path else '',relative=path.relative_to(Path(root).resolve()).as_posix() if path else '',available=complete,status='saved' if complete else 'incomplete' if path else str(item.get('status') or 'unavailable'),size=actual if path else expected or 0,mime=str(item.get('mime') or '')))
     return result
 
-_cache=OrderedDict();_lock=threading.Lock()
+_cache=OrderedDict();_lock=threading.Lock();_roots_cache={}
 def inspect_folder(path):
     selected=Path(path).expanduser().resolve()
     if not selected.is_dir():raise ValueError('Choose an existing exporter folder.')
     parent=selected.parent
     root=parent if selected.name.lower() in ('json','markdown','html','attachments','files') and (any((parent/n).is_file() for n in ('conversation-index.json','portable-state.json','conversations.json','viewer-handoff.json')) or (parent/'json').is_dir() and (parent/'markdown').is_dir()) else selected
-    indexes=[root/n for n in ('viewer-handoff.json','portable-state.json','conversation-index.json') if (root/n).is_file()]
+    from discovery import iter_documents
+    names=('viewer-handoff.json','portable-state.json','conversation-index.json')
+    with _lock:cached_roots=_roots_cache.get(str(root))
+    if cached_roots and time.monotonic()-cached_roots[0]<10:indexes=cached_roots[1]
+    else:
+        status={'errors':[]}
+        indexes=[p for p in iter_documents(root,root,threading.Event(),status,Path(__file__).parent) if p.name in names]
+        if status['errors']:raise ValueError('Export inspection: '+'; '.join(status['errors'][:4]))
+        with _lock:
+            _roots_cache[str(root)]=(time.monotonic(),indexes)
+            if len(_roots_cache)>6:_roots_cache.pop(next(iter(_roots_cache)))
+    indexes=[p for p in indexes if p.is_file()]
+    indexes.sort(key=lambda p:(p.name=='conversation-index.json',p.name!='viewer-handoff.json',str(p)))
     fingerprint=tuple((str(p),p.stat().st_mtime_ns,p.stat().st_size) for p in indexes);key=(str(root),fingerprint)
     with _lock:
         cached=_cache.get(key)
         if cached and time.monotonic()-cached[0]<10:return dict(cached[1])
-    merged={};warnings=[];version=''
+    merged={};owners={};warnings=[];version=''
     for p in indexes:
         try:
-            data=json.loads(p.read_text(encoding='utf-8-sig')) if p.stat().st_size<=32*1024**2 else None
-            if data is None:raise ValueError('Exporter metadata exceeds the 32 MB limit.')
+            data=read_metadata(p)
             if isinstance(data,dict):version=str(data.get('version') or version)
-            for e in entries(data):merged[e['id']]={**merged.get(e['id'],{}),**e}
+            for e in entries(data):merged[e['id']]={**merged.get(e['id'],{}),**e};owners[e['id']]=p.parent
         except (ValueError,OSError) as error:warnings.append(p.name+': '+str(error))
     available=missing=pending=0
     for e in merged.values():
-        if saved_path(root,e.get('json')) or saved_path(root,e.get('markdown')):available+=1
+        owner=owners[e['id']]
+        if saved_path(owner,e.get('json')) or saved_path(owner,e.get('markdown')):available+=1
         else:missing+=1
         if e.get('attachment_pending') or e.get('attachmentPending'):pending+=1
     standard=(root/'conversations.json').is_file()
     result=dict(root=str(root),selected=str(selected),format='ChatGPT Exporter' if indexes else 'ChatGPT data export' if standard else 'Conversation folder',exporter_version=version,expected=len(merged),available=available,missing=missing,pending_attachments=pending,has_index=bool(indexes),has_library=(root/'attachments/library-index.json').is_file(),has_handoff=(root/'viewer-handoff.json').is_file(),has_json=(root/'json').is_dir() or standard,has_markdown=(root/'markdown').is_dir(),warnings=warnings,generated_at=time.time())
+    roots=sorted({p.parent for p in indexes});result['exporter_roots']=[str(p) for p in roots]
+    for flag,relative in (('has_library','attachments/library-index.json'),('has_handoff','viewer-handoff.json'),('has_json','json'),('has_markdown','markdown')):result[flag]|=any((p/relative).exists() for p in roots)
     with _lock:
         _cache[key]=(time.monotonic(),dict(result));_cache.move_to_end(key)
         while len(_cache)>6:_cache.popitem(last=False)

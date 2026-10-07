@@ -8,13 +8,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from chat_types import surface_signal, source_surface_hint, source_header, canonical_kind, prefer_signal, free_account
 from source_reader import SourceReader, page_rows, native_conversation
-from exporter_bridge import entries as exporter_entries, normalize_entry, attachment_records, inspect_folder
+from exporter_bridge import entries as exporter_entries, normalize_entry, attachment_records, inspect_folder,read_metadata
 
 APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.7'
+VERSION = '1.1.8'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -316,6 +316,7 @@ class Archive:
             CREATE TABLE IF NOT EXISTS chunk_rows(cid TEXT,rowid INTEGER,PRIMARY KEY(cid,rowid));
             CREATE TABLE IF NOT EXISTS title_rows(cid TEXT PRIMARY KEY,rowid INTEGER);
             CREATE TABLE IF NOT EXISTS manifest_entries(cid TEXT,manifest TEXT,metadata TEXT,path TEXT,available INTEGER,PRIMARY KEY(cid,manifest));
+            CREATE TABLE IF NOT EXISTS exporter_manifests(path TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS scanned_files(path TEXT PRIMARY KEY,fingerprint TEXT,status TEXT);
             CREATE TABLE IF NOT EXISTS vectors(cid TEXT,seq INTEGER,part INTEGER,hash TEXT,vector BLOB,PRIMARY KEY(cid,seq,part));
             ''')
@@ -326,6 +327,8 @@ class Archive:
             if 'extras' not in columns:db.execute("ALTER TABLE messages ADD COLUMN extras TEXT DEFAULT '{}'")
             if 'kind_evidence' not in {r['name'] for r in db.execute('PRAGMA table_info(chats)')}:
                 db.execute("ALTER TABLE chats ADD COLUMN kind_evidence TEXT DEFAULT ''")
+            if 'source_updated' not in {r['name'] for r in db.execute('PRAGMA table_info(chats)')}:
+                db.execute('ALTER TABLE chats ADD COLUMN source_updated REAL DEFAULT 0')
             db.execute("UPDATE chats SET kind='chat' WHERE kind NOT IN ('chat','work','codex') AND lower(kind) NOT LIKE '%work%' AND lower(kind) NOT LIKE '%codex%'")
             db.execute("UPDATE chats SET kind='work' WHERE lower(kind) LIKE '%work%'")
             db.execute("UPDATE chats SET kind='codex' WHERE lower(kind) LIKE '%codex%'")
@@ -620,6 +623,9 @@ class Archive:
             missing=expected-ready-available
             examples=[dict(id=r['cid'],title=json.loads(r['metadata']).get('title') or r['cid']) for r in db.execute('SELECT cid,metadata FROM manifest_entries') if r['cid'] in missing][:8]
             return dict(expected=len(expected),indexed=len(ready),available=len(ready|available),missing=len(missing),examples=examples)
+    def register_exporter(self,manifest):
+        with self.lock,self.connect() as db:db.execute('INSERT OR IGNORE INTO exporter_manifests VALUES(?)',(str(Path(manifest).resolve()),))
+
     def register_manifest(self,entry,manifest,root):
         entry=normalize_entry(entry)
         if not entry:return
@@ -749,7 +755,8 @@ class Archive:
                         elif not ismeta and record and record['fingerprint']==fp and record['status']=='ignored':
                             self.status['cached']+=1
                         elif ismeta:
-                            d=json.loads(f.read_text(encoding='utf-8-sig'))
+                            d=read_metadata(f)
+                            self.register_exporter(f)
                             for e in exporter_entries(d):
                                 if event.is_set():break
                                 if isinstance(e,dict) and e.get('id'):
@@ -760,7 +767,17 @@ class Archive:
                                 had_items=True
                                 if event.is_set():break
                                 cid=item['id']
-                                if cid in seen and seen[cid]>=rank:continue
+                                with self.connect() as db:prior=db.execute('SELECT path,source_updated FROM chats WHERE id=?',(cid,)).fetchone()
+                                duplicate_json=prior and prior['path']!=str(f) and f.suffix.lower()=='.json' and Path(prior['path']).suffix.lower()=='.json' and Path(prior['path']).is_file()
+                                source_updated=item.get('updated',0)
+                                prior_updated=prior['source_updated'] if prior else 0
+                                if duplicate_json and not prior_updated:
+                                    prior_updated=epoch(source_header(prior['path']).get('update_time'))
+                                    if prior_updated:
+                                        with self.lock,self.connect() as db:db.execute('UPDATE chats SET source_updated=? WHERE id=?',(prior_updated,cid))
+                                if duplicate_json and source_updated and prior_updated and source_updated<prior_updated:continue
+                                newer_source=duplicate_json and source_updated>prior_updated
+                                if cid in seen and seen[cid]>=rank and not newer_source:continue
                                 if cid in cached_ids:
                                     seen[cid]=rank;self.enrich(cid,metadata.get(cid,{}));reused=True;continue
                                 # A cached JSON remains preferred if an MD copy is discovered first.
@@ -823,6 +840,7 @@ class Archive:
             db.execute('INSERT OR REPLACE INTO title_rows VALUES(?,?)',(cid,title.lastrowid))
             db.execute('DELETE FROM messages WHERE cid=?',(cid,));db.execute('DELETE FROM chunks WHERE rowid IN (SELECT rowid FROM chunk_rows WHERE cid=?)',(cid,));db.execute('DELETE FROM chunk_rows WHERE cid=?',(cid,));db.execute('DELETE FROM vectors WHERE cid=?',(cid,))
             db.execute('INSERT OR REPLACE INTO chats(id,title,url,created,updated,kind,project,path,fingerprint,count,folder,kind_evidence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(cid,item['title'],item['url'],created,updated,canonical_kind(item['kind']),project,str(path),fp,len(msgs),str(path.parent.relative_to(root)),item.get('kind_evidence','')))
+            db.execute('UPDATE chats SET source_updated=? WHERE id=?',(item.get('updated',0),cid))
             if item.get('pinned'):db.execute('INSERT OR IGNORE INTO organization(cid,pinned) VALUES(?,1)',(cid,))
             for seq,m in enumerate(msgs):
                 if seq%20==0:self.yield_background()
@@ -1325,8 +1343,9 @@ class Handler(BaseHTTPRequestHandler):
                 folder=self.server.backup.drive.folder(d.get('id',''));self.send(self.server.backup.save_config({'folder_id':folder['id'],'folder_name':folder['name']}));return
             elif self.path=='/api/backup/run':self.send(self.server.backup.start(upload=d.get('upload',True)));return
             elif self.path=='/api/backup/migrate':self.send(self.server.backup.migrate());return
+            elif self.path=='/api/backup/retry':self.send(self.server.backup.retry_delivery());return
             elif self.path=='/api/backup/cleanup':self.send(self.server.backup.cleanup());return
-            elif self.path=='/api/backup/cancel':self.server.backup.cancel.set()
+            elif self.path=='/api/backup/cancel':self.send(self.server.backup.cancel_jobs());return
             elif self.path=='/api/backup/schedule':self.send(self.server.backup.schedule(bool(d.get('enabled'))));return
             elif self.path=='/api/backup/import':self.send(self.server.backup.import_zip(d.get('path',''),bool(d.get('restore_settings'))));return
             elif self.path=='/api/pick-archive':

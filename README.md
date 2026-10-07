@@ -1,17 +1,27 @@
-# Offline Chat Viewer · v1.1.7
+# Offline Chat Viewer · v1.1.8
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.7-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.7/Offline-Chat-Viewer-v1.1.7-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.7/Offline-Chat-Viewer-v1.1.7-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.8-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.8/Offline-Chat-Viewer-v1.1.8-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.8/Offline-Chat-Viewer-v1.1.8-Windows.zip.sha256.txt)
 
 ## What the viewer does
 
 Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Your exports remain untouched.
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## Exporter 2.4.10, queued updates and reliable mirroring · v1.1.8
+
+- Reads current large exporter manifests up to 128 MiB with a bounded fingerprint cache that retains useful metadata and drops logs/job internals. Duplicate JSON copies prefer source update dates over local rewrite times.
+- Continue using the complete exporter folder selected in the loader. Nested backups, content-addressed attachments and Library-only handoffs are recognized. Folder inspection reports nested export roots, and empty conversation indexes no longer hide saved Library files.
+- ZIP creation completes locally before delivery starts. If Drive is unavailable, both completed ZIPs remain downloadable and delivery is saved for retry. Retry checks the saved ZIP hashes and never rescans an offline source. Changing destinations or replacing ZIPs cannot silently redirect a retry.
+- Busy backup/copy requests enter a bounded, persistent queue. Repeated requests with the same delivery policy combine; local-only requests remain separate. The queue recovers after restarting or upgrading. **Cancel work & retries** cancels queued/active work and pauses delivery; **Retry saved ZIP delivery** resumes it explicitly.
+- Failed delivery retries after 2 minutes, then backs off up to 6 hours. Automatic jobs still obey the selected idle and power rules. After a manual cancellation, periodic backups wait until their next interval. Local-only creation never implicitly publishes changed ZIPs.
+- With automatic backups enabled, **Back up exporter updates after two quiet minutes** checks only known manifest timestamps/sizes, including nested roots. It queues a new backup once those markers settle and idle/power rules allow it. The hourly interval remains the fallback; switching this option off leaves interval-only backups. No recursive archive scan runs on every timer tick.
+- Drive for desktop detection prefers an available `G:\My Drive`, populates its dedicated backup folder and preserves your custom choices. The viewer verifies local synced-folder copies; Google's desktop application performs the cloud upload. No API setup is required for this route.
 
 ## Exporter 2.4.4 and selective ZIPs · v1.1.7
 
@@ -214,6 +224,8 @@ If an export omits the account plan, the viewer cannot prove whether Luna was se
 
 ## Validation
 
+v1.1.8: **206 backend tests**, JavaScript syntax, renderer/catalog and isolated Edge checks. Adds regression checks for busy requests, persistent claims, cross-process cancellation, isolated local/upload policies, offline delivery/restart, destination changes, ZIP corruption, retry backoff, quiet exporter updates and nested Library-only exports. Full backend, renderer/catalog and isolated Edge checks are recorded in the release notes.
+
 v1.1.7: **188 backend tests**, JavaScript syntax checks, renderer/geometry/cache checks and combined catalog-filter/order checks. New regression coverage includes handoff-only exports, shared progress companions, historical source metadata, hash conflicts, selectable formats, hash/state/index consistency, attachment-only cross-links, omitted-file hashing, policy changes and verified migration with an offline source. Isolated Edge checks exercise content choices, source/Drive suggestions, local ZIP creation and copying to a local test destination.
 
 The diagnostic test now allows realistic Windows loopback scheduling while still timing out a deliberately stalled endpoint. OAuth and Drive API responses are mocked; no live Google upload or unattended scheduled run is claimed for this update. Keep `.viewer-data` during app replacement. Personal preferences and archive data are verified separately from the clean portable ZIP.
@@ -224,6 +236,7 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 
 | Version | Recorded changes |
 | --- | --- |
+| **1.1.8** | Exporter 2.4.10 nested-root and Library-only compatibility; persistent coalesced backup queue; complete local ZIPs before Drive delivery; verified retry without rescanning, exponential backoff and cancellation; quiet exporter-update detection; visible queue/retry controls and guarded double submission. |
 | **1.1.7** | Exporter 2.4.4 handoff, shared source/history and version support; selective ZIP formats; typed indexes and SHA-256 state JSON/CSV; shared progress attachments; verified existing-ZIP Drive migration; candidate autofill; filter/read-state backup restoration; adjustable saved sidebar width and refined section styling. |
 | **1.1.6** | Compact catalog search; combined read/project/pin/untitled/inclusive date filters; sidebar dates and created/updated/message metadata; read revisions; quick rename and keyboard navigation; reverse alphabetical/updated sorts; filtered drags preserve hidden placements. |
 | **1.1.5** | Exporter-root inspection and portable-state metadata merging; JSON preference and newer-copy import protection; per-chat searchable file previews/downloads; bounded source/Markdown caches; indexed long-chat paging; numeric chart range/extrema/gaps and lazy data tables. |

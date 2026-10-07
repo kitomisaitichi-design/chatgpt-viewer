@@ -9,6 +9,7 @@ from atomic_files import atomic_bytes
 from folder_tools import drive_suggestion,open_folder
 from backup_policy import interval_seconds,power_allowed,retire_extras
 from exporter_bridge import metadata_sources,timestamp
+from backup_queue import BackupQueue
 
 SKIP={'.viewer-data','.git','__pycache__','node_modules','runtime','models','.semantic-env'}
 TEXT={'.md','.json','.jsonl'}
@@ -160,7 +161,7 @@ class BackupManager:
         self.archive=archive;self.app=Path(app);self.data=archive.data_dir;self.folder=self.data/'backups';self.folder.mkdir(exist_ok=True);self.drive=Drive(self.data)
         self.cancel=threading.Event();self.worker=None;self.stop=threading.Event();self.scheduled=False;self.last_write=0;self.progress_lock=threading.RLock()
         self.config_path=self.data/'backup-config.json';self.state_path=self.data/'backup-state.secure';self.status_path=self.data/'backup-progress.json'
-        self.lock_path=self.data/'backup.lock'
+        self.lock_path=self.data/'backup.lock';self.worker_guard=threading.RLock();self.current_job=None;self.last_queue_check=0
         if archive.profile:
             self.lock_path=archive.profile.path.with_suffix('.backup.lock')
             shared=archive.profile.path.with_suffix('.backup-state.secure')
@@ -168,6 +169,7 @@ class BackupManager:
                 with job_lock(self.lock_path):
                     if not shared.exists():atomic_bytes(shared,self.state_path.read_bytes(),private=True)
             self.state_path=shared
+        self.queue=BackupQueue(self.state_path.with_suffix('.queue.json'),job_lock)
         self.folder=Path(self.config()['local_folder']);self.folder.mkdir(parents=True,exist_ok=True)
     def config(self):
         settings=self.archive.settings();default=dict(source=settings.get('scan_start',''),up=settings.get('scan_up',0),source_mode='loader',route='desktop',local_folder=str(self.data.resolve().parent/'Backups'),sync_folder='',enabled=False,cadence='daily',interval_hours=24,idle_minutes=10,idle_required=True,ac_only=True,auto_upload=True,cleanup_extras=True,modes='both',include_formats=list(FORMATS),folder_id='',folder_name='')
@@ -177,10 +179,12 @@ class BackupManager:
             if 'source_mode' not in saved:default['source_mode']='loader' if saved.get('source')==settings.get('scan_start') else 'custom'
             if 'route' not in saved and saved.get('folder_id'):default['route']='api'
         if default['source_mode']=='loader':default.update(source=settings.get('scan_start',''),up=settings.get('scan_up',0))
+        default.setdefault('follow_exporter',True)
         if default['route']=='desktop' and not default['sync_folder']:default['sync_folder']=drive_suggestion().get('sync_folder','')
         return default
     def save_config(self,values):
         config=self.config()
+        if 'follow_exporter' in values:config['follow_exporter']=bool(values['follow_exporter'])
         for k in ('source','up','source_mode','route','local_folder','sync_folder','cadence','interval_hours','idle_minutes','idle_required','ac_only','auto_upload','cleanup_extras','modes','include_formats','folder_id','folder_name'):
             if k in values:config[k]=values[k]
         if 'source' in values and 'source_mode' not in values:config['source_mode']='custom'
@@ -261,12 +265,16 @@ class BackupManager:
             progress={'phase':'Previous job stopped','message':'Run it again to continue. Completed backups and original files have been kept.'}
         state=self.state();public={k:state.get(k) for k in ('last_success','last_local','last_checked','last_fingerprint','missing_count','missing','last_import','source_counts','scope_root')}
         public['files']={k:{**{field:value.get(field) for field in ('id','webViewLink','sha256','size','uploaded_at','desktop_copy')},'path':str(self.local_path(k)),'exists':self.local_path(k).is_file()} for k,value in state.get('slots',{}).items()}
-        return dict(config=self.config(),connection=self.drive.status(),progress=progress,running=running,**public)
+        pending=state.get('delivery_pending',{})
+        return dict(config=self.config(),connection=self.drive.status(),progress=progress,running=running or bool(self.worker and self.worker.is_alive()),queue=self.queue.status(),delivery_pending=bool(pending),retry_at=pending.get('retry_at'),retry_error=pending.get('error',''),retry_paused=pending.get('paused',False),**public)
     def update(self,**values):
         with self.progress_lock:
             if time.monotonic()-self.last_write<.25 and not values.get('force'):return
             values.pop('force',None);values.update(at=time.time());write_json(self.status_path,values);self.last_write=time.monotonic()
     def check(self):
+        if self.current_job and time.monotonic()-self.last_queue_check>=.5:
+            self.last_queue_check=time.monotonic()
+            if self.queue.cancelled(self.current_job):self.cancel.set()
         if self.cancel.is_set():raise InterruptedError('Cancelled. Completed backups and original exports are kept.')
         if self.scheduled:
             seconds=idle_seconds()
@@ -276,44 +284,84 @@ class BackupManager:
         # Cancellation must also remain responsive during this short pause.
         if self.archive.foreground.is_set() and self.cancel.wait(.02):raise InterruptedError('Cancelled. Completed backups and original exports are kept.')
     def start(self,upload=True,scheduled=False):
-        if self.worker and self.worker.is_alive():raise ValueError('A backup or import is already running.')
-        self.cancel.clear();self.scheduled=scheduled;self.worker=threading.Thread(target=self._run,args=(upload,),daemon=True);self.worker.start();return {'started':True}
-    def _run(self,upload):
+        queued=self.status()['running'];self.queue.push('backup',upload,scheduled);self.kick();return {'started':not queued,'queued':queued}
+    def eligible(self,job):
+        pending=self.state().get('delivery_pending',{})
+        if job.get('kind')=='backup' and pending.get('requested_at')==job.get('at') and time.time()<pending.get('retry_at',0):return False
+        if not job.get('scheduled'):return True
+        config=self.config();seconds=idle_seconds()
+        return config['enabled'] and power_allowed(config) and (not config['idle_required'] or seconds is not None and seconds>=config['idle_minutes']*60)
+    def kick(self):
+        with self.worker_guard:
+            if self.stop.is_set() or self.worker and self.worker.is_alive():return
+            self.cancel.clear();self.worker=threading.Thread(target=self.process_queue,daemon=True);self.worker.start()
+    def process_queue(self):
         try:
-            with job_lock(self.lock_path):self.run(upload)
-        except InterruptedError as e:self.update(phase='Waiting' if self.scheduled else 'Cancelled',error=str(e),force=True)
+            with job_lock(self.lock_path):
+                # Bound a burst; remaining intents survive for the next scheduler tick.
+                for _ in range(8):
+                    if self.stop.is_set() or self.cancel.is_set():break
+                    job=self.queue.claim(self.eligible)
+                    if not job:break
+                    self.scheduled=job['scheduled'];self.current_job=job;self.last_queue_check=0
+                    try:
+                        if job['kind']=='mirror':self.prepare_migration();self.resume_delivery();self.update(phase='Completed ZIPs copied',done=1,total=1,message='Verified ZIPs copied. Google Drive for desktop handles cloud sync.',force=True)
+                        elif job['kind']=='retry':
+                            if self.state().get('delivery_pending'):self.resume_delivery()
+                        elif job['upload'] and self.state().get('delivery_pending',{}).get('requested_at')==job['at']:self.resume_delivery()
+                        else:self.run(job['upload'])
+                    except InterruptedError as e:
+                        if self.cancel.is_set() and not self.stop.is_set():self.pause_delivery()
+                        self.update(phase='Waiting' if self.scheduled or self.stop.is_set() else 'Cancelled',error=str(e),force=True)
+                        if self.stop.is_set():break
+                        if self.scheduled and not self.cancel.is_set():
+                            if self.state().get('delivery_pending'):self.queue.ack()
+                            break
+                    except Exception as e:
+                        state=self.state();state['retry_backup_at']=time.time()+300;save_private(self.state_path,state)
+                        self.update(phase='Needs attention',error=str(e),force=True)
+                    self.queue.ack();self.current_job=None
+        except ValueError as e:
+            # Another process owns the worker; leave the durable intents for it.
+            if 'already running' not in str(e):self.update(phase='Needs attention',error=str(e),force=True)
         except Exception as e:self.update(phase='Needs attention',error=str(e),force=True)
+        finally:self.current_job=None
+    def cancel_jobs(self):
+        self.cancel.set();self.queue.clear()
+        if not self.status()['running']:
+            with job_lock(self.lock_path):self.pause_delivery()
+        return {'cancelled':True}
+    def pause_delivery(self):
+        state=self.state();state['retry_backup_at']=time.time()+interval_seconds(self.config())
+        if state.get('delivery_pending'):state['delivery_pending']['paused']=True
+        save_private(self.state_path,state)
     def migrate(self):
-        """Copy verified, completed ZIPs; do not rescan or rebuild an offline source."""
-        if self.worker and self.worker.is_alive():raise ValueError('A backup or import is already running.')
+        """Queue delivery of existing ZIPs without touching the source archive."""
         config=self.config()
-        if config['route']!='desktop' or not self.ready(config):raise ValueError('Choose an available Drive for desktop backup folder first.')
-        self.cancel.clear();self.scheduled=False
-        def copy():
-            try:
-                with job_lock(self.lock_path):
-                    state=self.state();modes=['full','progress'] if config['modes']=='both' else [config['modes']];copied=0
-                    self.update(phase='Copying completed ZIPs',done=0,total=0,force=True)
-                    for mode in modes:
-                        slot=state.get('slots',{}).get(mode,{});path=self.local_path(mode)
-                        if not slot.get('sha256') or not path.is_file():continue
-                        self.check();self.update(phase='Copying: verifying '+mode+' ZIP',done=0,total=path.stat().st_size,force=True)
-                        if str(path)!=slot.get('path') or digest(path,self.check)[0]!=slot['sha256']:raise ValueError('The '+mode+' ZIP does not match its saved hash. Create local ZIPs before copying.')
-                        self.publish_desktop(path,config['sync_folder'],slot,state);copied+=1
-                    if not copied:raise ValueError('Create local ZIPs first. There are no completed ZIPs in the selected local folder.')
-                    if config['cleanup_extras']:state['cleanup']=self.cleanup(config,state,modes)
-                    save_private(self.state_path,state);self.update(phase='Completed ZIPs copied',done=1,total=1,message='Copied '+str(copied)+' verified ZIPs. Google Drive for desktop handles cloud sync.',force=True)
-            except InterruptedError as e:self.update(phase='Cancelled',error=str(e),force=True)
-            except Exception as e:self.update(phase='Needs attention',error=str(e),force=True)
-        self.worker=threading.Thread(target=copy,daemon=True);self.worker.start();return {'started':True}
+        if config['route']!='desktop':raise ValueError('Select the Drive for desktop route first.')
+        queued=self.status()['running'];self.queue.push('mirror',True,False);self.kick();return {'started':not queued,'queued':queued}
+    def prepare_migration(self):
+        config=self.config();state=self.state();modes=['full','progress'] if config['modes']=='both' else [config['modes']]
+        modes=[m for m in modes if state.get('slots',{}).get(m,{}).get('sha256') and self.local_path(m).is_file()]
+        if not modes:raise ValueError('Create local ZIPs first. There are no completed ZIPs in the selected local folder.')
+        for mode in modes:
+            if str(self.local_path(mode))!=state['slots'][mode]['path']:raise ValueError('The local folder changed. Create local ZIPs first.')
+        state['delivery_pending']=dict(destination='desktop:'+config['sync_folder'],modes=modes,fingerprint=state.get('local_fingerprint',state.get('last_fingerprint','')),scheduled=False,
+            slots={mode:{k:state['slots'][mode][k] for k in ('path','sha256')} for mode in modes})
+        # Older versions did not keep a local baseline after uploaded backups.
+        state.setdefault('local_baseline',state.get('baseline',{}));save_private(self.state_path,state)
+    def retry_delivery(self):
+        if not self.state().get('delivery_pending'):raise ValueError('There is no pending delivery to retry.')
+        self.queue.push('retry',True,False);self.kick();return {'queued':True}
     def run(self,upload=True):
         config=self.config();state=self.state();self.update(phase='Preparing backup',done=0,total=0,force=True)
         if not config['source']:raise ValueError('Choose the export folder first.')
-        if upload and not self.ready(config):raise ValueError('Choose the Google Drive for desktop folder, or connect the optional direct account route. Local ZIP creation needs neither.')
         config,root,files,fingerprint,missing,links=self.inventory(True,state)
         self.folder=Path(config['local_folder']);self.folder.mkdir(parents=True,exist_ok=True)
         if not any(file_kind(p)!='metadata' for p in files):raise ValueError('No files match your selected content types in this export folder. Review the folder and content choices.')
         state['hash_cache']=files;state['last_checked']=time.time();state['missing_count']=len(missing);state['missing']=missing[:100];state['source_counts']=counts(files);state['scope_root']=str(root)
+        markers=[str(root/p) for p in files if Path(p).name in ('viewer-handoff.json','conversation-index.json','portable-state.json')][:128]
+        state['exporter_watch']=dict(source=[config['source'],config['up']],paths=markers,signature=self.marker_signature(markers),changed_at=0)
         settings=self.archive.settings();catalog=self.archive.catalog();organization=[{k:c.get(k) for k in ('id','category','pinned','position','alias','trashed','color','sticky')} for c in catalog];source_map=[];conversations=conversation_map(root,files,catalog)
         for c in conversations:
             related={p for doc in [*c.get('markdown',[]),*c.get('json',[])] for p in links.get(doc,[]) if p in files and p not in c.get('markdown',[]) and p not in c.get('json',[])};c['attachments']=sorted(set(c.get('attachments',[]))|related)
@@ -328,15 +376,36 @@ class BackupManager:
         for mode in modes:
             self.check();selected=files if mode=='full' else changed;path=self.folder/('Chat-Archive-'+mode.title()+'.zip');slot=slots.setdefault(mode,{})
             manifest=dict(schema='offline-chat-viewer/backup-v1',mode=mode,fingerprint=fingerprint,base_fingerprint=state.get('last_fingerprint') if mode=='progress' else None,include_formats=config['include_formats'],files=selected,conversations=[c for c in source_map if c['path'] in selected],deleted=deleted if mode=='progress' else [],missing=missing,source=dict(selected=config['source'],up=config['up'],root=str(root)),counts=counts(selected))
-            if slot.get('fingerprint')!=fingerprint or slot.get('path')!=str(path) or not path.exists():
+            valid=path.is_file() and slot.get('path')==str(path) and slot.get('fingerprint')==fingerprint
+            if valid and slot.get('zip_stat')!=[path.stat().st_size,path.stat().st_mtime_ns]:valid=digest(path,self.check)[0]==slot.get('sha256')
+            if not valid:
                 required=sum(v['size'] for v in selected.values())
                 if shutil.disk_usage(self.folder).free<required+128*1024**2:raise ValueError('Not enough free space to safely build the ZIP. Free space and retry; the previous backup is kept.')
                 sha,md5=build_zip(root,path,selected,manifest,presentation,self.update,self.check,linked_index(selected,conversations,missing))
                 if slot.get('sha256')!=sha:slot.pop('session',None)
                 slot.update(sha256=sha,md5=md5,size=path.stat().st_size,fingerprint=fingerprint,path=str(path))
+                slot['zip_stat']=[path.stat().st_size,path.stat().st_mtime_ns]
                 save_private(self.state_path,state)
-            if upload and config['route']=='desktop':self.publish_desktop(path,config['sync_folder'],slot,state)
-            if upload and config['route']=='api' and (slot.get('uploaded_sha256')!=slot['sha256'] or slot.get('uploaded_folder')!=config['folder_id']):
+        state.update(local_baseline=files,last_local=time.time(),local_fingerprint=fingerprint)
+        state.pop('retry_backup_at',None)
+        if upload:
+            state['delivery_pending']=dict(destination=delivery,modes=modes,fingerprint=fingerprint,scheduled=self.scheduled,requested_at=self.current_job.get('at',0) if self.current_job else 0,
+                slots={mode:dict(path=slots[mode]['path'],sha256=slots[mode]['sha256']) for mode in modes})
+        elif state.get('delivery_pending'):
+            # A local-only action must never silently publish newly replaced slots.
+            state['delivery_pending']['paused']=True
+        save_private(self.state_path,state)
+        if upload:self.resume_delivery()
+        else:
+            if config['cleanup_extras']:state['cleanup']=self.cleanup(config,state,modes)
+            save_private(self.state_path,state);self.update(phase='Local ZIPs ready',done=1,total=1,message='Saved in '+str(self.folder),warning=(str(len(missing))+' unresolved local references; details are in the manifest.' if missing else ''),force=True)
+    def deliver(self,config,state,modes):
+        for mode in modes:
+            self.check();slot=state['slots'][mode];path=Path(slot['path'])
+            self.update(phase='Copying: verifying '+mode+' ZIP',done=0,total=slot['size'],force=True)
+            if not path.is_file() or digest(path,self.check)[0]!=slot['sha256']:raise ValueError('The '+mode+' ZIP does not match its saved hash. Create local ZIPs before copying.')
+            if config['route']=='desktop':self.publish_desktop(path,config['sync_folder'],slot,state)
+            if config['route']=='api' and (slot.get('uploaded_sha256')!=slot['sha256'] or slot.get('uploaded_folder')!=config['folder_id']):
                 if slot.get('uploaded_folder') and slot['uploaded_folder']!=config['folder_id']:slot.pop('id',None);slot.pop('session',None)
                 self.update(phase='Uploading '+mode+' backup',done=0,total=slot['size'],force=True)
                 manager=self
@@ -353,10 +422,27 @@ class BackupManager:
                 result=self.drive.upload(path,config['folder_id'],slot,lambda:save_private(self.state_path,state),lambda done,total:self.update(phase='Uploading '+mode+' backup',done=done,total=total),IdleCancel())
                 if result.get('md5Checksum')!=slot['md5'] or int(result.get('size',-1))!=slot['size']:raise ValueError('Google did not confirm matching backup bytes. Retry to verify the upload.')
                 slot.update(result);slot.update(uploaded_sha256=slot['sha256'],uploaded_folder=config['folder_id'],uploaded_at=time.time());slot.pop('session',None);save_private(self.state_path,state)
-        if upload:state.update(baseline=files,baseline_destination=delivery,last_fingerprint=fingerprint,last_success=time.time())
-        else:state.update(local_baseline=files,last_local=time.time())
-        if config['cleanup_extras']:state['cleanup']=self.cleanup(config,state,modes)
-        save_private(self.state_path,state);self.update(phase='Copied to Google Drive folder' if upload and config['route']=='desktop' else 'Backups up to date' if upload else 'Local ZIPs ready',done=1,total=1,message='Google Drive for desktop handles uploading; check its sync status.' if upload and config['route']=='desktop' else 'Saved in '+str(self.folder),warning=(str(len(missing))+' file/path references could not be resolved locally. These can include example paths in saved code; discovered attachment files are included.' if missing else ''),force=True)
+    def resume_delivery(self):
+        config=self.config();state=self.state();pending=state.get('delivery_pending')
+        if not pending:raise ValueError('There are no completed ZIPs awaiting delivery.')
+        delivery=config['route']+':'+(config['sync_folder'] if config['route']=='desktop' else config['folder_id'])
+        try:
+            if pending['destination']!=delivery:raise ValueError('The destination changed. Run a new backup to approve delivery to this folder.')
+            for mode,expected in pending['slots'].items():
+                slot=state.get('slots',{}).get(mode,{})
+                if any(slot.get(k)!=v for k,v in expected.items()):raise ValueError('Completed ZIPs changed. Run a new backup before mirroring.')
+            if not self.ready(config):raise ValueError('Google Drive is unavailable. Local ZIPs are ready; delivery will retry when the destination returns.')
+            self.deliver(config,state,pending['modes'])
+            state.update(baseline=state['local_baseline'],baseline_destination=delivery,last_fingerprint=pending['fingerprint'],last_success=time.time())
+            state.pop('delivery_pending',None)
+            if config['cleanup_extras']:state['cleanup']=self.cleanup(config,state,pending['modes'])
+            save_private(self.state_path,state)
+            self.update(phase='Copied to Google Drive folder' if config['route']=='desktop' else 'Backups up to date',done=1,total=1,message='Verified ZIPs copied. Google Drive for desktop handles cloud sync.' if config['route']=='desktop' else 'Google confirmed matching uploaded bytes.',force=True)
+        except Exception as error:
+            pending['attempts']=pending.get('attempts',0)+1;pending['error']=str(error)
+            pending['retry_at']=time.time()+min(21600,60*2**min(pending['attempts'],9))
+            if isinstance(error,InterruptedError) and not self.scheduled and not self.stop.is_set():pending['paused']=True
+            save_private(self.state_path,state);raise
     def cleanup(self,config=None,state=None,modes=None):
         if config is None and self.status()['running']:raise ValueError('Wait for the current backup or import before cleaning up ZIPs.')
         config=config or self.config();state=state or self.state();modes=modes or (['full','progress'] if config['modes']=='both' else [config['modes']])
@@ -380,6 +466,8 @@ class BackupManager:
                             for c in metadata.get('conversations',[]):mappings.setdefault(c.get('path'),[]).append(c)
                     catalog={c['id']:c for c in self.archive.catalog()};indexed=skipped=0
                     discovered=discover_documents(root,root,self.cancel,self.app)
+                    for manifest in discovered:
+                        if manifest.name in ('viewer-handoff.json','conversation-index.json','portable-state.json'):self.archive.register_exporter(manifest)
                     exporter_meta,by_path,manifests=metadata_sources(root,discovered)
                     for entry,manifest in manifests:
                         self.check();self.archive.register_manifest(entry,manifest,root)
@@ -421,18 +509,39 @@ class BackupManager:
             except Exception as e:self.update(phase='Import needs attention',error=str(e),force=True)
         self.worker=threading.Thread(target=run,daemon=True);self.worker.start();return {'started':True}
     def due(self):
-        config=self.config();seconds=idle_seconds();state=self.state()
-        return config['enabled'] and (not config['auto_upload'] or self.ready(config)) and power_allowed(config) and (not config['idle_required'] or seconds is not None and seconds>=config['idle_minutes']*60) and time.time()-state.get('last_success' if config['auto_upload'] else 'last_local',0)>=interval_seconds(config)
+        config=self.config();state=self.state()
+        return self.eligible({'scheduled':True}) and time.time()>=state.get('retry_backup_at',0) and time.time()-max(state.get('last_local',0),state.get('last_success',0))>=interval_seconds(config)
+    @staticmethod
+    def marker_signature(paths):
+        result=[]
+        for path in paths:
+            try:stat=Path(path).stat();result.append([path,stat.st_size,stat.st_mtime_ns])
+            except FileNotFoundError:result.append([path,None,None])
+        return result
+    def exporter_changed(self,state):
+        config=self.config();watch=state.get('exporter_watch',{})
+        if not config['enabled'] or not config['follow_exporter'] or watch.get('source')!=[config['source'],config['up']]:return False
+        signature=self.marker_signature(watch.get('paths',[]))
+        if signature!=watch.get('signature'):
+            watch.update(signature=signature,changed_at=time.time());save_private(self.state_path,state);return False
+        return bool(watch.get('changed_at') and time.time()-watch['changed_at']>=120 and time.time()>=state.get('retry_backup_at',0) and self.eligible({'scheduled':True}))
+    def tick(self):
+        if self.status()['running']:return
+        state=self.state();pending=state.get('delivery_pending',{})
+        if pending and not pending.get('paused') and time.time()>=pending.get('retry_at',0) and self.eligible({'scheduled':pending.get('scheduled',False)}):
+            self.queue.push('retry',True,pending.get('scheduled',False))
+        elif self.due() or self.exporter_changed(state):self.queue.push('backup',self.config()['auto_upload'],True)
+        queue=self.queue.status()
+        if queue['pending'] or queue['active']:self.kick()
     def start_scheduler(self):
         def loop():
             while not self.stop.wait(60):
-                try:
-                    if self.due() and not (self.worker and self.worker.is_alive()):self.start(upload=self.config()['auto_upload'],scheduled=True)
-                except Exception:pass
-        threading.Thread(target=loop,daemon=True).start()
+                try:self.tick()
+                except Exception as e:self.update(phase='Needs attention',error=str(e),force=True)
+        self.tick();threading.Thread(target=loop,daemon=True).start()
     def schedule(self,enabled):
         config=self.config()
-        if enabled and (not config['source'] or config['auto_upload'] and not self.ready(config)):raise ValueError('Choose the export folder and a Google Drive for desktop folder, or set up the optional direct account connection, before enabling scheduled backups.')
+        if enabled and (not config['source'] or config['auto_upload'] and not (config['sync_folder'] if config['route']=='desktop' else self.ready(config))):raise ValueError('Choose the export folder and a Google Drive for desktop folder, or set up the optional direct account connection, before enabling scheduled backups.')
         if os.name!='nt':
             if enabled:raise ValueError('Backups while the viewer is closed currently require Windows. Manual backups remain available.')
             config['enabled']=False;write_json(self.config_path,config)

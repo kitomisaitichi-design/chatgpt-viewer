@@ -1,10 +1,9 @@
 """Read exporter file catalogs, with bounded paths and streaming file delivery."""
 import hashlib,json,mimetypes,os,shutil,tempfile,threading,time
 from pathlib import Path,PurePosixPath
-from exporter_bridge import entries as exporter_entries
+from exporter_bridge import entries as exporter_entries,read_metadata,META_LIMIT
 
 IMAGE_EXT={'.png','.jpg','.jpeg','.gif','.webp','.avif','.bmp'}
-META_LIMIT=32*1024*1024
 
 def safe_relative(value):
     if not isinstance(value,str) or '\\' in value or ':' in value or '\x00' in value:return None
@@ -14,7 +13,7 @@ def safe_relative(value):
 
 def read_index(path):
     if not path.is_file() or path.is_symlink() or path.stat().st_size>META_LIMIT:return None
-    try:return json.loads(path.read_text(encoding='utf-8-sig'))
+    try:return read_metadata(path)
     except (ValueError,OSError):return None
 
 class FileCatalog:
@@ -22,6 +21,7 @@ class FileCatalog:
         self.archive=archive;self.lock=threading.RLock();self.signature=None;self.entries={};self.notes=[]
     def manifests(self):
         with self.archive.connect() as db:paths=[Path(r['manifest']) for r in db.execute('SELECT DISTINCT manifest FROM manifest_entries')]
+        with self.archive.connect() as db:paths.extend(Path(r['path']) for r in db.execute('SELECT path FROM exporter_manifests'))
         roots={p.parent.resolve() for p in paths}
         start=self.archive.settings().get('scan_start')
         if start:
