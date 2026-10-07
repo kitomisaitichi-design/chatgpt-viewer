@@ -1,17 +1,25 @@
-# Offline Chat Viewer · v1.1.8
+# Offline Chat Viewer · v1.1.9
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.8-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.8/Offline-Chat-Viewer-v1.1.8-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.8/Offline-Chat-Viewer-v1.1.8-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.9-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.9/Offline-Chat-Viewer-v1.1.9-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.9/Offline-Chat-Viewer-v1.1.9-Windows.zip.sha256.txt)
 
 ## What the viewer does
 
 Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Your exports remain untouched.
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## Backups while the exporter is running · v1.1.9
+
+- Backup capture, ZIP packaging and Drive delivery run as separate background stages. The ZIP reads verified captured bytes, so rewriting `attachments/library-catalog.html` or a chat after capture cannot abort packaging.
+- A file changing during capture gets two bounded attempts, then yields to an automatic retry with backoff. Other verified files are retained, the pending request survives restart, and the UI shows **Waiting for exporter** with its retry time. Cancel still stops work and preserves completed ZIPs.
+- A backup is a per-file capture over an interval, rather than a transactional point-in-time snapshot of the entire exporter. Newer writes enter the next backup. A continually unstable file delays completion instead of silently producing an incomplete full ZIP.
+- Captures reuse unchanged files and require additional local disk space for one captured copy. Packaging verifies SHA-256 against those copies. Original paths, linked indexes and source provenance remain intact.
+- Repeated unchanged requests reuse the same ZIP bytes. Changed backups replace `Chat-Archive-Full.zip` and/or `Chat-Archive-Progress.zip` atomically; the selected two modes remain separate. Drive delivery skips unchanged verified copies. Source archives and unrelated ZIPs are never deleted.
 
 ## Exporter 2.4.10, queued updates and reliable mirroring · v1.1.8
 
@@ -224,6 +232,8 @@ If an export omits the account plan, the viewer cannot prove whether Luna was se
 
 ## Validation
 
+v1.1.9 adds live-source mutation, bounded capture retry/restart, cancellation, frozen Markdown links and unchanged local/Drive ZIP reuse regressions. Validation details are recorded in the release notes.
+
 v1.1.8: **206 backend tests**, JavaScript syntax, renderer/catalog and isolated Edge checks. Adds regression checks for busy requests, persistent claims, cross-process cancellation, isolated local/upload policies, offline delivery/restart, destination changes, ZIP corruption, retry backoff, quiet exporter updates and nested Library-only exports. Full backend, renderer/catalog and isolated Edge checks are recorded in the release notes.
 
 v1.1.7: **188 backend tests**, JavaScript syntax checks, renderer/geometry/cache checks and combined catalog-filter/order checks. New regression coverage includes handoff-only exports, shared progress companions, historical source metadata, hash conflicts, selectable formats, hash/state/index consistency, attachment-only cross-links, omitted-file hashing, policy changes and verified migration with an offline source. Isolated Edge checks exercise content choices, source/Drive suggestions, local ZIP creation and copying to a local test destination.
@@ -236,6 +246,7 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 
 | Version | Recorded changes |
 | --- | --- |
+| **1.1.9** | Resumable verified per-file captures decouple active exports from ZIP packaging; changing files retry automatically without losing stable work; pending capture survives restart; waiting/retry feedback; unchanged capture and two-slot ZIP reuse. |
 | **1.1.8** | Exporter 2.4.10 nested-root and Library-only compatibility; persistent coalesced backup queue; complete local ZIPs before Drive delivery; verified retry without rescanning, exponential backoff and cancellation; quiet exporter-update detection; visible queue/retry controls and guarded double submission. |
 | **1.1.7** | Exporter 2.4.4 handoff, shared source/history and version support; selective ZIP formats; typed indexes and SHA-256 state JSON/CSV; shared progress attachments; verified existing-ZIP Drive migration; candidate autofill; filter/read-state backup restoration; adjustable saved sidebar width and refined section styling. |
 | **1.1.6** | Compact catalog search; combined read/project/pin/untitled/inclusive date filters; sidebar dates and created/updated/message metadata; read revisions; quick rename and keyboard navigation; reverse alphabetical/updated sorts; filtered drags preserve hidden placements. |

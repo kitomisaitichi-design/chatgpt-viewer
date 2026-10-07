@@ -10,6 +10,7 @@ from folder_tools import drive_suggestion,open_folder
 from backup_policy import interval_seconds,power_allowed,retire_extras
 from exporter_bridge import metadata_sources,timestamp
 from backup_queue import BackupQueue
+from backup_snapshot import Snapshot,SnapshotPending,BackupSourceChanged
 
 SKIP={'.viewer-data','.git','__pycache__','node_modules','runtime','models','.semantic-env'}
 TEXT={'.md','.json','.jsonl'}
@@ -60,21 +61,24 @@ def local_links(text):
         except ValueError:pass
     return {urllib.parse.unquote(value.split('#')[0].split('?')[0]).replace('\\','/') for value in values if isinstance(value,str) and value and not re.match(r'^(?:https?:|data:|mailto:|javascript:|#)',value,re.I)}
 
-def plan_files(root,cache=None,progress=lambda **kw:None,check=lambda:None,documents=None,exclude=(),links=None,reference_cache=None,formats=FORMATS):
+def plan_files(root,cache=None,progress=lambda **kw:None,check=lambda:None,documents=None,exclude=(),links=None,reference_cache=None,formats=FORMATS,snapshot=None):
     root=Path(root).expanduser().resolve()
     if not root.is_dir() or root.parent==root:raise ValueError('Choose a specific export folder, not a whole drive.')
     cache=cache or {};missing=[];links={} if links is None else links
     if documents is None:documents=discover_documents(root,root,threading.Event(),Path(__file__).parent,exclude)
+    if snapshot:
+        documents=snapshot.paths('documents',documents);snapshot.capture_many(documents)
     paths=set(documents);reference_cache={} if reference_cache is None else reference_cache
     # Keep paths relative to the export root, so Markdown/JSON links survive extraction.
     for index,p in enumerate(documents):
         check();progress(phase='Finding linked attachments',done=index+1,total=len(documents),current=p.name)
-        if p.stat().st_size>512*1024*1024:raise ValueError(p.name+' is over 512 MiB. Split that export before backing it up.')
-        relative=p.relative_to(root).as_posix();stat=p.stat();saved=reference_cache.get(relative,{})
+        captured=snapshot.capture(p)[0] if snapshot else p
+        if captured.stat().st_size>512*1024*1024:raise ValueError(p.name+' is over 512 MiB. Split that export before backing it up.')
+        relative=p.relative_to(root).as_posix();stat=captured.stat();saved=reference_cache.get(relative,{})
         if saved.get('size')==stat.st_size and saved.get('mtime_ns')==stat.st_mtime_ns and 'refs' in saved:refs=set(saved['refs'])
         else:
             refs=set();tail=''
-            with p.open(encoding='utf-8-sig',errors='replace') as source:
+            with captured.open(encoding='utf-8-sig',errors='replace') as source:
                 while part:=source.read(1024*1024):
                     check();text=tail+part;refs.update(local_links(text));tail=text[-16384:]
             reference_cache[relative]=dict(size=stat.st_size,mtime_ns=stat.st_mtime_ns,refs=sorted(refs))
@@ -82,14 +86,19 @@ def plan_files(root,cache=None,progress=lambda **kw:None,check=lambda:None,docum
             target=(p.parent/ref).resolve()
             if not target.is_relative_to(root):missing.append(dict(document=p.relative_to(root).as_posix(),reference=ref,reason='Outside the chosen export folder'));continue
             if any(target.is_relative_to(Path(x).resolve()) for x in exclude):continue
-            if target.is_file() and not target.is_symlink():paths.add(target);links.setdefault(p.relative_to(root).as_posix(),[]).append(target.relative_to(root).as_posix())
+            if (target.is_file() or snapshot and snapshot.exists(target)) and not target.is_symlink():paths.add(target);links.setdefault(p.relative_to(root).as_posix(),[]).append(target.relative_to(root).as_posix())
             elif not ref.startswith(('sandbox:','sediment:','file-service:')):missing.append(dict(document=p.relative_to(root).as_posix(),reference=ref,reason='Not saved locally'))
     # Exporters sometimes keep binary attachments by ID without a resolvable text link.
     paths.update(asset_paths(root,documents,check,exclude))
     paths={p for p in paths if file_kind(p.relative_to(root).as_posix())=='metadata' or file_kind(p.relative_to(root).as_posix()) in formats}
+    if snapshot:
+        paths=snapshot.paths('candidates',paths);snapshot.capture_many(paths)
     result={};total=len(paths)
     for index,p in enumerate(sorted(paths)):
-        check();relative=p.relative_to(root).as_posix();s=p.stat();old=cache.get(relative,{})
+        check();relative=p.relative_to(root).as_posix()
+        if snapshot:
+            result[relative]=snapshot.capture(p)[1];continue
+        s=p.stat();old=cache.get(relative,{})
         progress(phase='Checking backup changes',done=index+1,total=total,current=p.name)
         sha=old.get('sha256') if old.get('sha256') and old.get('size')==s.st_size and old.get('mtime_ns')==s.st_mtime_ns else digest(p,check)[0]
         after=p.stat()
@@ -103,7 +112,7 @@ def build_zip(root,destination,files,manifest,settings=None,progress=lambda **kw
     with zipfile.ZipFile(temporary,'w',zipfile.ZIP_DEFLATED,compresslevel=3,allowZip64=True) as z:
         for relative,expected in sorted(files.items()):
             check();p=root/relative;before=p.stat()
-            if before.st_size!=expected['size'] or before.st_mtime_ns!=expected['mtime_ns']:raise ValueError(relative+' changed before packaging. Retry when the export is stable.')
+            if before.st_size!=expected['size'] or before.st_mtime_ns!=expected['mtime_ns']:raise BackupSourceChanged(relative,relative+' changed before packaging. Retry when the export is stable.')
             info=zipfile.ZipInfo('archive/'+relative,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED
             if hasattr(info,'compress_level'):info.compress_level=3
             else:info._compresslevel=3  # Python 3.10–3.12 expose only the underlying slot.
@@ -111,7 +120,7 @@ def build_zip(root,destination,files,manifest,settings=None,progress=lambda **kw
             with p.open('rb') as source,z.open(info,'w',force_zip64=True) as target:
                 while part:=source.read(1024*1024):
                     check();target.write(part);sha.update(part);done+=len(part);progress(phase='Packaging '+manifest['mode']+' backup',done=done,total=total,current=p.name)
-            if sha.hexdigest()!=expected['sha256']:raise ValueError(relative+' changed during packaging. The previous backup has been kept.')
+            if sha.hexdigest()!=expected['sha256']:raise BackupSourceChanged(relative,relative+' changed during packaging. The previous backup has been kept.')
         for name,value in [('backup-manifest.json',manifest),('viewer-settings.json',settings)]:
             if value is not None:
                 info=zipfile.ZipInfo(name,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;z.writestr(info,json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')))
@@ -161,7 +170,7 @@ class BackupManager:
         self.archive=archive;self.app=Path(app);self.data=archive.data_dir;self.folder=self.data/'backups';self.folder.mkdir(exist_ok=True);self.drive=Drive(self.data)
         self.cancel=threading.Event();self.worker=None;self.stop=threading.Event();self.scheduled=False;self.last_write=0;self.progress_lock=threading.RLock()
         self.config_path=self.data/'backup-config.json';self.state_path=self.data/'backup-state.secure';self.status_path=self.data/'backup-progress.json'
-        self.lock_path=self.data/'backup.lock';self.worker_guard=threading.RLock();self.current_job=None;self.last_queue_check=0
+        self.lock_path=self.data/'backup.lock';self.worker_guard=threading.RLock();self.current_job=None;self.last_queue_check=0;self.snapshot=None
         if archive.profile:
             self.lock_path=archive.profile.path.with_suffix('.backup.lock')
             shared=archive.profile.path.with_suffix('.backup-state.secure')
@@ -170,15 +179,21 @@ class BackupManager:
                     if not shared.exists():atomic_bytes(shared,self.state_path.read_bytes(),private=True)
             self.state_path=shared
         self.queue=BackupQueue(self.state_path.with_suffix('.queue.json'),job_lock)
+        self.default_local_folder=str(self.data.resolve().parent/'Backups')
+        # Shared slot provenance survives versioned app folders. Never guess from
+        # unrelated ZIPs or override an explicitly saved destination.
+        previous={str(Path(slot['path']).parent) for mode,slot in self.state().get('slots',{}).items() if mode in ('full','progress') and slot.get('path') and Path(slot['path']).name=='Chat-Archive-'+mode.title()+'.zip' and Path(slot['path']).is_file()}
+        if len(previous)==1:self.default_local_folder=previous.pop()
         self.folder=Path(self.config()['local_folder']);self.folder.mkdir(parents=True,exist_ok=True)
     def config(self):
-        settings=self.archive.settings();default=dict(source=settings.get('scan_start',''),up=settings.get('scan_up',0),source_mode='loader',route='desktop',local_folder=str(self.data.resolve().parent/'Backups'),sync_folder='',enabled=False,cadence='daily',interval_hours=24,idle_minutes=10,idle_required=True,ac_only=True,auto_upload=True,cleanup_extras=True,modes='both',include_formats=list(FORMATS),folder_id='',folder_name='')
+        settings=self.archive.settings();default=dict(source=settings.get('scan_start',''),up=settings.get('scan_up',0),source_mode='loader',route='desktop',local_folder=self.default_local_folder,sync_folder='',enabled=False,cadence='daily',interval_hours=24,idle_minutes=10,idle_required=True,ac_only=True,auto_upload=True,cleanup_extras=True,modes='both',include_formats=list(FORMATS),folder_id='',folder_name='')
         if self.config_path.exists():
             saved=json.loads(self.config_path.read_text(encoding='utf-8'));default.update(saved)
             if 'interval_hours' not in saved:default['interval_hours']=168 if saved.get('cadence')=='weekly' else 24
             if 'source_mode' not in saved:default['source_mode']='loader' if saved.get('source')==settings.get('scan_start') else 'custom'
             if 'route' not in saved and saved.get('folder_id'):default['route']='api'
         if default['source_mode']=='loader':default.update(source=settings.get('scan_start',''),up=settings.get('scan_up',0))
+        if not default['local_folder']:default['local_folder']=self.default_local_folder
         default.setdefault('follow_exporter',True)
         if default['route']=='desktop' and not default['sync_folder']:default['sync_folder']=drive_suggestion().get('sync_folder','')
         return default
@@ -194,7 +209,7 @@ class BackupManager:
         config['include_formats']=[f for f in FORMATS if f in formats]
         if config['source_mode']=='loader':
             settings=self.archive.settings();config.update(source=settings.get('scan_start',''),up=settings.get('scan_up',0))
-        if not config['local_folder']:config['local_folder']=str(self.data.resolve().parent/'Backups')
+        if not config['local_folder']:config['local_folder']=self.default_local_folder
         config['up']=max(0,min(4,int(config['up'])))
         if config['cadence'] not in ('daily','weekly','custom') or config['modes'] not in ('both','full','progress'):raise ValueError('Invalid backup schedule.')
         if 'interval_hours' not in values and 'cadence' in values:config['interval_hours']=168 if values['cadence']=='weekly' else 24
@@ -216,10 +231,10 @@ class BackupManager:
     def scope(self):
         config=self.config();start,root=scan_boundary(config['source'],config['up']);return config,start,root
     def inventory(self,hashes=False,state=None):
-        config,start,root=self.scope();excluded=tuple(Path(p).resolve() for p in (str(self.data),config['local_folder'],config['sync_folder']) if p)
-        docs=discover_documents(start,root,self.cancel,self.app,excluded)
+        config,start,root=self.scope();excluded=tuple(Path(p).resolve() for p in (str(self.data),str(self.state_path.parent/'backup-snapshots'),config['local_folder'],config['sync_folder']) if p)
+        docs=[root/p for p in self.snapshot.state['documents']] if hashes and self.snapshot and 'documents' in self.snapshot.state else discover_documents(start,root,self.cancel,self.app,excluded)
         links={}
-        if hashes:files,fingerprint,missing=plan_files(root,(state or {}).get('hash_cache'),self.update,self.check,docs,excluded,links,state.setdefault('reference_cache',{}) if state is not None else None,config['include_formats'])
+        if hashes:files,fingerprint,missing=plan_files(root,(state or {}).get('hash_cache'),self.update,self.check,docs,excluded,links,state.setdefault('reference_cache',{}) if state is not None else None,config['include_formats'],self.snapshot)
         else:
             paths=set(docs)|asset_paths(root,docs,self.check,excluded);files={p.relative_to(root).as_posix():{'size':p.stat().st_size} for p in paths};fingerprint='';missing=[]
             files=select_files(files,config['include_formats'])
@@ -266,7 +281,8 @@ class BackupManager:
         state=self.state();public={k:state.get(k) for k in ('last_success','last_local','last_checked','last_fingerprint','missing_count','missing','last_import','source_counts','scope_root')}
         public['files']={k:{**{field:value.get(field) for field in ('id','webViewLink','sha256','size','uploaded_at','desktop_copy')},'path':str(self.local_path(k)),'exists':self.local_path(k).is_file()} for k,value in state.get('slots',{}).items()}
         pending=state.get('delivery_pending',{})
-        return dict(config=self.config(),connection=self.drive.status(),progress=progress,running=running or bool(self.worker and self.worker.is_alive()),queue=self.queue.status(),delivery_pending=bool(pending),retry_at=pending.get('retry_at'),retry_error=pending.get('error',''),retry_paused=pending.get('paused',False),**public)
+        capture=state.get('capture_pending',{})
+        return dict(config=self.config(),connection=self.drive.status(),progress=progress,running=running or bool(self.worker and self.worker.is_alive()),queue=self.queue.status(),capture_pending=bool(capture),capture_retry_at=capture.get('retry_at'),delivery_pending=bool(pending),retry_at=pending.get('retry_at'),retry_error=pending.get('error',''),retry_paused=pending.get('paused',False),**public)
     def update(self,**values):
         with self.progress_lock:
             if time.monotonic()-self.last_write<.25 and not values.get('force'):return
@@ -286,6 +302,8 @@ class BackupManager:
     def start(self,upload=True,scheduled=False):
         queued=self.status()['running'];self.queue.push('backup',upload,scheduled);self.kick();return {'started':not queued,'queued':queued}
     def eligible(self,job):
+        capture=self.state().get('capture_pending',{})
+        if job.get('kind')=='backup' and capture.get('requested_at')==job.get('at') and time.time()<capture.get('retry_at',0):return False
         pending=self.state().get('delivery_pending',{})
         if job.get('kind')=='backup' and pending.get('requested_at')==job.get('at') and time.time()<pending.get('retry_at',0):return False
         if not job.get('scheduled'):return True
@@ -310,6 +328,13 @@ class BackupManager:
                             if self.state().get('delivery_pending'):self.resume_delivery()
                         elif job['upload'] and self.state().get('delivery_pending',{}).get('requested_at')==job['at']:self.resume_delivery()
                         else:self.run(job['upload'])
+                    except SnapshotPending as e:
+                        state=self.state();pending=state.get('capture_pending',{})
+                        attempts=pending.get('attempts',0)+1 if pending.get('requested_at')==job['at'] else 1
+                        state['capture_pending']=dict(requested_at=job['at'],retry_at=time.time()+min(300,15*2**min(attempts-1,5)),attempts=attempts)
+                        save_private(self.state_path,state)
+                        self.update(phase='Waiting for exporter',message=str(e)+' Verified captures and completed ZIPs are kept; retrying automatically.',force=True)
+                        break  # Keep the durable claim; other policies can run on the next tick.
                     except InterruptedError as e:
                         if self.cancel.is_set() and not self.stop.is_set():self.pause_delivery()
                         self.update(phase='Waiting' if self.scheduled or self.stop.is_set() else 'Cancelled',error=str(e),force=True)
@@ -333,6 +358,7 @@ class BackupManager:
         return {'cancelled':True}
     def pause_delivery(self):
         state=self.state();state['retry_backup_at']=time.time()+interval_seconds(self.config())
+        state.pop('capture_pending',None)
         if state.get('delivery_pending'):state['delivery_pending']['paused']=True
         save_private(self.state_path,state)
     def migrate(self):
@@ -356,13 +382,19 @@ class BackupManager:
     def run(self,upload=True):
         config=self.config();state=self.state();self.update(phase='Preparing backup',done=0,total=0,force=True)
         if not config['source']:raise ValueError('Choose the export folder first.')
+        _,start,source_root=self.scope()
+        scope_hash=hashlib.sha256(json.dumps([str(source_root),str(start)],sort_keys=True).encode()).hexdigest()[:24]
+        capture_key=hashlib.sha256(json.dumps([self.current_job['at'] if self.current_job else uuid.uuid4().hex,config['include_formats']],sort_keys=True).encode()).hexdigest()
+        self.snapshot=Snapshot(self.state_path.parent/'backup-snapshots'/scope_hash,source_root,capture_key,self.update,self.check)
         config,root,files,fingerprint,missing,links=self.inventory(True,state)
         self.folder=Path(config['local_folder']);self.folder.mkdir(parents=True,exist_ok=True)
         if not any(file_kind(p)!='metadata' for p in files):raise ValueError('No files match your selected content types in this export folder. Review the folder and content choices.')
         state['hash_cache']=files;state['last_checked']=time.time();state['missing_count']=len(missing);state['missing']=missing[:100];state['source_counts']=counts(files);state['scope_root']=str(root)
         markers=[str(root/p) for p in files if Path(p).name in ('viewer-handoff.json','conversation-index.json','portable-state.json')][:128]
         state['exporter_watch']=dict(source=[config['source'],config['up']],paths=markers,signature=self.marker_signature(markers),changed_at=0)
-        settings=self.archive.settings();catalog=self.archive.catalog();organization=[{k:c.get(k) for k in ('id','category','pinned','position','alias','trashed','color','sticky')} for c in catalog];source_map=[];conversations=conversation_map(root,files,catalog)
+        settings=self.archive.settings();catalog=self.archive.catalog();organization=[{k:c.get(k) for k in ('id','category','pinned','position','alias','trashed','color','sticky')} for c in catalog];source_map=[]
+        captured_catalog=[{**c,'path':str(self.snapshot.tree/Path(c['path']).resolve().relative_to(root))} for c in catalog if c.get('path') and Path(c['path']).resolve().is_relative_to(root)]
+        conversations=conversation_map(self.snapshot.tree,files,captured_catalog)
         for c in conversations:
             related={p for doc in [*c.get('markdown',[]),*c.get('json',[])] for p in links.get(doc,[]) if p in files and p not in c.get('markdown',[]) and p not in c.get('json',[])};c['attachments']=sorted(set(c.get('attachments',[]))|related)
             for path in [*c.get('markdown',[]),*c.get('json',[])]:source_map.append(dict(path=path,**{k:c.get(k) for k in ('id','title','url','created','updated','kind','project')}))
@@ -381,13 +413,18 @@ class BackupManager:
             if not valid:
                 required=sum(v['size'] for v in selected.values())
                 if shutil.disk_usage(self.folder).free<required+128*1024**2:raise ValueError('Not enough free space to safely build the ZIP. Free space and retry; the previous backup is kept.')
-                sha,md5=build_zip(root,path,selected,manifest,presentation,self.update,self.check,linked_index(selected,conversations,missing))
+                try:sha,md5=build_zip(self.snapshot.tree,path,selected,manifest,presentation,self.update,self.check,linked_index(selected,conversations,missing))
+                except BackupSourceChanged as error:
+                    self.snapshot.invalidate(error.path)
+                    state.get('reference_cache',{}).pop(error.path,None);save_private(self.state_path,state)
+                    raise SnapshotPending(error.path+' failed captured-byte verification and will be captured again.') from error
                 if slot.get('sha256')!=sha:slot.pop('session',None)
                 slot.update(sha256=sha,md5=md5,size=path.stat().st_size,fingerprint=fingerprint,path=str(path))
                 slot['zip_stat']=[path.stat().st_size,path.stat().st_mtime_ns]
                 save_private(self.state_path,state)
         state.update(local_baseline=files,last_local=time.time(),local_fingerprint=fingerprint)
         state.pop('retry_backup_at',None)
+        state.pop('capture_pending',None)
         if upload:
             state['delivery_pending']=dict(destination=delivery,modes=modes,fingerprint=fingerprint,scheduled=self.scheduled,requested_at=self.current_job.get('at',0) if self.current_job else 0,
                 slots={mode:dict(path=slots[mode]['path'],sha256=slots[mode]['sha256']) for mode in modes})
@@ -395,6 +432,7 @@ class BackupManager:
             # A local-only action must never silently publish newly replaced slots.
             state['delivery_pending']['paused']=True
         save_private(self.state_path,state)
+        self.snapshot.prune(files)
         if upload:self.resume_delivery()
         else:
             if config['cleanup_extras']:state['cleanup']=self.cleanup(config,state,modes)
@@ -530,7 +568,7 @@ class BackupManager:
         state=self.state();pending=state.get('delivery_pending',{})
         if pending and not pending.get('paused') and time.time()>=pending.get('retry_at',0) and self.eligible({'scheduled':pending.get('scheduled',False)}):
             self.queue.push('retry',True,pending.get('scheduled',False))
-        elif self.due() or self.exporter_changed(state):self.queue.push('backup',self.config()['auto_upload'],True)
+        elif not state.get('capture_pending') and (self.due() or self.exporter_changed(state)):self.queue.push('backup',self.config()['auto_upload'],True)
         queue=self.queue.status()
         if queue['pending'] or queue['active']:self.kick()
     def start_scheduler(self):
