@@ -8,7 +8,7 @@ paths=subprocess.check_output(['git','ls-files','-z'],cwd=root).decode().split('
 paths+=subprocess.check_output(['git','ls-files','--others','--exclude-standard','-z'],cwd=root).decode().split('\0')
 paths=sorted({p for p in paths if p and p!='.gitignore' and not p.startswith(('.github/','tests/','scripts/','release-notes/'))})
 name=f'Offline-Chat-Viewer-v{version}-Windows.zip';target=out/name
-for required in ['viewer.py','library_files.py','START-VIEWER.bat','runtime/python.exe','runtime/python313.zip','web/files.js','web/files.css']:
+for required in ['viewer.py','thread_images.py','web/thread-images.js','web/document-cards.js','web/media.css','library_files.py','START-VIEWER.bat','runtime/python.exe','runtime/python313.zip','web/files.js','web/files.css']:
  if required not in paths:raise ValueError('Missing portable file: '+required)
 with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
  for relative in paths:

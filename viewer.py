@@ -8,13 +8,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from chat_types import surface_signal, source_surface_hint, source_header, canonical_kind, prefer_signal, free_account
 from source_reader import SourceReader, page_rows, native_conversation
+from thread_images import message_images
 from exporter_bridge import entries as exporter_entries, normalize_entry, attachment_records, inspect_folder,read_metadata
 
 APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.9'
+VERSION = '1.1.10'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -235,14 +236,14 @@ def parse_json(data,path,leaf=None):
             if role=='assistant' and m.get('recipient') not in (None,'','all'):visible=False
             if not text.strip(): continue
             mid=node.get('id') or node_ids.get(id(node),'')
-            extra={'node_id':mid,'receipt':receipt(m.get('metadata') or {}),'versions':versions(mid) if mid else [],'sources':source_links(m.get('metadata') or {}),'presentation':block_presentation(text,role,c,m),'account_free':free_account(data) or free_account(m)}
+            extra={'image_refs':message_images(m),'node_id':mid,'receipt':receipt(m.get('metadata') or {}),'versions':versions(mid) if mid else [],'sources':source_links(m.get('metadata') or {}),'presentation':block_presentation(text,role,c,m),'account_free':free_account(data) or free_account(m)}
             messages.append(dict(role=role,channel=channel,text=text,time=epoch(m.get('create_time')),visible=int(visible),extras=extra))
     elif isinstance(data.get('messages'),list):
         for m in data['messages']:
             if not isinstance(m,dict): continue
             role=m.get('role') or (m.get('author') or {}).get('role','assistant')
             text=content_text(m.get('content') or m.get('text') or '')
-            if text.strip(): messages.append(dict(role=role,channel=m.get('channel',''),text=text,time=epoch(m.get('create_time')),visible=int(role in ('user','assistant') and m.get('channel') not in ('analysis','justify','confidence')),extras={'receipt':receipt(m.get('metadata') or m),'sources':source_links(m.get('metadata') or m),'presentation':block_presentation(text,role,m.get('content'),m),'account_free':free_account(data) or free_account(m)}))
+            if text.strip(): messages.append(dict(role=role,channel=m.get('channel',''),text=text,time=epoch(m.get('create_time')),visible=int(role in ('user','assistant') and m.get('channel') not in ('analysis','justify','confidence')),extras={'image_refs':message_images(m),'receipt':receipt(m.get('metadata') or m),'sources':source_links(m.get('metadata') or m),'presentation':block_presentation(text,role,m.get('content'),m),'account_free':free_account(data) or free_account(m)}))
     else: return None
     cid=str(data.get('conversation_id') or data.get('id') or infer_id(path))
     signal=surface_signal(data)
@@ -1159,6 +1160,8 @@ class Server(ThreadingHTTPServer):
         self.backup=BackupManager(archive,APP)
         from library_files import FileCatalog
         self.files=FileCatalog(archive)
+        from thread_images import ThreadImages
+        self.images=ThreadImages(archive,self.files)
     def transfer_status(self):
         with self.transfer_lock:
             active=[dict(r,elapsed_ms=round((time.monotonic()-r['started'])*1000)) for r in self.transfers.values()]
@@ -1231,6 +1234,12 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_response(200);self.send_header('Content-Type','application/zip');self.send_header('Content-Length',str(path.stat().st_size));self.send_header('Content-Disposition','attachment; filename="'+path.name+'"');self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.end_headers()
                     while part:=file.read(128*1024):self.wfile.write(part)
                 return
+            if url.path=='/api/thread-images':
+                with a.foreground_read():self.send(self.server.images.public(q['id'],q.get('leaf')))
+                return
+            if url.path=='/api/thread-images/content':
+                with a.foreground_read():f=self.server.images.file(q['id'],q['image'],q.get('leaf'))
+                self.stream_file(f,True);return
             if url.path=='/api/files':
                 self.send(self.server.files.list(q.get('search',''),q.get('status','all'),q.get('conversation',''),q.get('offset',0),q.get('limit',50),q.get('source','all')));return
             if url.path=='/api/files/content':

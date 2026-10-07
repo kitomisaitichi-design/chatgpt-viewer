@@ -29,6 +29,7 @@ jobs:
       - name: Check renderer JavaScript
         run: |
           for file in web/*.js; do node --check "$file"; done
+          node tests/check_documents.js
           node tests/check_rendering.js
           node tests/check_catalog.js
       - name: Build and publish ZIP and checksum

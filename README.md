@@ -1,17 +1,26 @@
-# Offline Chat Viewer · v1.1.9
+# Offline Chat Viewer · v1.1.10
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.9-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.9/Offline-Chat-Viewer-v1.1.9-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.9/Offline-Chat-Viewer-v1.1.9-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.10-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.10/Offline-Chat-Viewer-v1.1.10-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.10/Offline-Chat-Viewer-v1.1.10-Windows.zip.sha256.txt)
 
 ## What the viewer does
 
 Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Your exports remain untouched.
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## Documents and thread images · v1.1.10
+
+- Exported `:::writing{variant="document" ...}` (also email/essay) enclosures become titled cards with **Copy document** and **Expand document**. The existing Markdown, formula, table, code-folding and saved-citation renderers still handle the body. Code-fenced examples and malformed headers remain literal; partial messages can render before the closing marker arrives. Copy preserves the original body Markdown and LaTeX.
+- Locally saved raster images appear as lazy thumbnails in their messages. Native image pointers and local Markdown/HTML images resolve through the same export roots and attachment/Library catalog. Open a thumbnail, inline image, associated Library file, or the **View all images in this chat** header button.
+- The enclosed image viewer supports **mouse-wheel zoom** (100–800%), **drag to pan while zoomed**, **horizontal drag/swipe while fitted**, **←/→**, **+/−**, **0/Fit**, and **Escape**. **Go to prompt** opens the original message, including messages outside the loaded rendering window. Motion follows the system reduced-motion preference.
+- Ordering follows saved message/prompt order. Repeated references share one image entry with their original prompt occurrences. Associated Library images without a saved prompt association appear last and are clearly labelled; their prompt-jump control is disabled rather than inventing an association.
+- Gallery metadata is bounded and fingerprint-cached by source revision, selected branch and attachment-manifest revision. It reuses the coalesced source reader; no repeated recursive image discovery or whole-thread DOM rendering. Only the selected and next image are decoded ahead, with at most three retained image elements. Missing copies offer retry and can arrive without reindexing the conversation.
+- Images stay local: remote URLs are not fetched, attachment paths remain root-bounded, and the image endpoint checks raster signatures before inline delivery. SVG/HTML and unsupported formats remain available through the existing download flow. No new dependencies or automatic changes to source exports, backups, organization or saved preferences.
 
 ## Backups while the exporter is running · v1.1.9
 
@@ -246,6 +255,7 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 
 | Version | Recorded changes |
 | --- | --- |
+| **1.1.10** | Titled writing/document cards with original-body copy and expansion; preserved LaTeX/citations; lazy native and Library images; cached whole-thread gallery with wheel zoom, swipe, pan, keyboard navigation, original-prompt jumps, reduced motion and missing-file recovery. |
 | **1.1.9** | Resumable verified per-file captures decouple active exports from ZIP packaging; changing files retry automatically without losing stable work; pending capture survives restart; waiting/retry feedback; unchanged capture and two-slot ZIP reuse. |
 | **1.1.8** | Exporter 2.4.10 nested-root and Library-only compatibility; persistent coalesced backup queue; complete local ZIPs before Drive delivery; verified retry without rescanning, exponential backoff and cancellation; quiet exporter-update detection; visible queue/retry controls and guarded double submission. |
 | **1.1.7** | Exporter 2.4.4 handoff, shared source/history and version support; selective ZIP formats; typed indexes and SHA-256 state JSON/CSV; shared progress attachments; verified existing-ZIP Drive migration; candidate autofill; filter/read-state backup restoration; adjustable saved sidebar width and refined section styling. |
