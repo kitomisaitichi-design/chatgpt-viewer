@@ -261,12 +261,20 @@ class BrowserCompanion:
                     recovery = self.archive.data_dir/'deletion-recovery'/row['id']
                     atomic_bytes(recovery/'remote.json',json.dumps(body,ensure_ascii=False).encode(),private=True)
                     # Compare the exact saved branch graph, not volatile index timestamps.
+                    from deletion_queue import read,digest
                     sources = list(recovery.glob('source.json'))
-                    saved = self.archive.source_reader.raw(row['cid'],sources[0]) if sources else {}
-                    baseline = graph_hash(saved)
-                    if not baseline:
+                    index=read(recovery/'index.json')
+                    if index.get('cid')==row['cid'] and index.get('scope')==row['scope']:
+                        for source in index.get('sources',[]):
+                            candidate=Path(source['copy'])
+                            if (candidate.suffix.lower()=='.json' and not candidate.is_symlink()
+                                and candidate.resolve().is_relative_to(recovery.resolve()) and candidate.is_file()
+                                and digest(candidate)==source.get('sha256')):sources.append(candidate)
+                    baselines={graph_hash(self.archive.source_reader.raw(row['cid'],source)) for source in sources}
+                    baselines.discard(None)
+                    if not baselines:
                         error = 'This local copy has no JSON graph to compare. Save its current JSON before remote deletion.'
-                    elif baseline != graph_hash(body):
+                    elif graph_hash(body) not in baselines:
                         error = 'ChatGPT has a different revision. New remote JSON was backed up; update and review this chat first.'
                     elif not self.enabled(row):
                         self.receipt(row,'paused')

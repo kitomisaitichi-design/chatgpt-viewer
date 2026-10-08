@@ -209,6 +209,18 @@ class DeletionQueue:
             if digest(path)!=sha or (before.st_size,before.st_mtime_ns)!=(path.stat().st_size,path.stat().st_mtime_ns):raise ValueError('Attachment changed while backing up; no deletion command sent')
             saved.append(dict(path=str(path),copy=str(target),sha256=sha,conversations=f['conversations'],root=str(f['root']),size=before.st_size))
         write(base/'index.json',dict(schema=SCHEMA,cid=row['cid'],scope=row['scope'],markdown_origin=origin,files=saved,sources=sources))
+    def previous_receipt(self,row):
+        # Receipts live with the export, so a fresh portable app can reuse proof
+        # from an older app database without repeating the remote operation.
+        proofs=[]
+        for path in (Path(row['root'])/'.viewer-queue/receipts').glob('*.json'):
+            if path.is_symlink():continue
+            proof=read(path)
+            if (proof.get('schema')==SCHEMA and proof.get('cid')==row['cid']
+                and proof.get('scope')==row['scope'] and proof.get('verified') is True
+                and proof.get('state')=='confirmed' and proof.get('remote_state','deleted') in ('deleted','unavailable')):
+                proofs.append(proof)
+        return max(proofs,key=lambda p:p.get('updated',0),default={})
     def tick(self):
         self.collect_checks()
         rows=self.rows();prepared=[]
@@ -216,6 +228,13 @@ class DeletionQueue:
             if row['state']!='preparing':continue
             try:
                 previous=json.loads(row['receipt'] or '{}')
+                if row['mode']=='library' and not (previous.get('verified') is True and previous.get('state')=='confirmed'):
+                    proof=self.previous_receipt(row)
+                    if proof:
+                        base=self.archive.data_dir/'deletion-recovery'/row['id']
+                        if not (base/'index.json').is_file():self.snapshot(row)
+                        previous=dict(proof,id=row['id'],run=row['run'],imported_from=proof['id'])
+                        with self.archive.connect() as db:db.execute('UPDATE deletion_jobs SET receipt=? WHERE id=?',(json.dumps(previous),row['id']))
                 if previous.get('verified') is True and previous.get('state')=='confirmed':
                     if row['mode']=='library':self.cleanup(row)
                     with self.archive.connect() as db:db.execute("UPDATE deletion_jobs SET state='confirmed',error='' WHERE id=?",(row['id'],))

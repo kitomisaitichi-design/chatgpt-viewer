@@ -73,6 +73,16 @@ class CollectionsNative(unittest.TestCase):
   q.enqueue([cid],mode='library');self.assertEqual(q.rows()[0]['state'],'failed')
   with patch.object(q,'start'),patch.object(q,'snapshot',side_effect=AssertionError('No second remote request')):q.action('run',[row['id']]);q.tick()
   self.assertFalse(p.exists());self.assertEqual(self.a.catalog(),[]);self.assertEqual(q.rows()[0]['state'],'confirmed')
+ def test_shared_receipt_from_older_app_cleans_new_job_locally(self):
+  cid,p=self.chat();q=self.queue()
+  write(self.root/'.viewer-queue/receipts/older-app.json',dict(schema=SCHEMA,id='older-app',cid=cid,scope='wrong-account',state='confirmed',verified=True,remote_state='unavailable',updated=1))
+  q.enqueue([cid]);row=q.rows()[0];self.assertFalse(q.previous_receipt(row))
+  write(self.root/'.viewer-queue/receipts/older-app.json',dict(schema=SCHEMA,id='older-app',cid=cid,scope=row['scope'],state='confirmed',verified=True,remote_state='unavailable',updated=1))
+  with patch.object(q,'start'),patch.object(q.browser,'configured',side_effect=AssertionError('No remote command')):
+   q.action('run',[row['id']]);q.tick()
+  self.assertFalse(p.exists());self.assertEqual(self.a.catalog(),[]);self.assertEqual(q.rows()[0]['state'],'confirmed')
+  self.assertEqual(json.loads(q.rows()[0]['receipt'])['imported_from'],'older-app')
+  self.assertFalse((self.root/'.viewer-queue/commands'/(row['id']+'.json')).exists())
  def test_unavailable_preserve_keeps_local_copy(self):
   cid,p=self.chat();q=self.queue();q.enqueue([cid],mode='preserve');row=self.run_queue(q)
   with patch.object(q,'cleanup') as cleanup:self.receipt(row,remote_state='unavailable');q.tick();cleanup.assert_not_called()

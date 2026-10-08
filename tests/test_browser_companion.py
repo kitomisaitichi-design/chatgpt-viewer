@@ -38,6 +38,14 @@ class BrowserQueue(unittest.TestCase):
     def result(self,req,result):
         return self.q.browser.result(dict(client='one',**req,result=result))
 
+    def test_markdown_primary_uses_verified_linked_json_backup(self):
+        from deletion_queue import write,digest
+        row=self.run_job();base=self.a.data_dir/'deletion-recovery'/row['id']
+        original=base/'source.json';linked=base/'sources'/'linked.json';linked.parent.mkdir(exist_ok=True);original.rename(linked)
+        index=read(base/'index.json');index['sources']=[dict(copy=str(linked),sha256=digest(linked))];write(base/'index.json',index)
+        req=self.request();self.result(req,dict(ok=True,status=200,data=self.body))
+        self.assertEqual(self.request()['phase'],'delete')
+
     def test_no_exporter_required_and_one_lease(self):
         row=self.run_job();self.assertEqual(row['scope'],scope_key(self.client['scope']))
         command=read(Path(row['root'])/'.viewer-queue/commands'/(row['id']+'.json'))
