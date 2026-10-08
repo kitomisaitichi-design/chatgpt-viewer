@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.23'
+VERSION = '1.1.24'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -1518,6 +1518,7 @@ class Handler(BaseHTTPRequestHandler):
                     from tkinter import filedialog
                     root=tk.Tk();root.withdraw();root.attributes('-topmost',True);folder=filedialog.askdirectory(title='Choose your exported chats folder',initialdir=d.get('path') or str(APP));root.destroy()
                 self.send({'path':folder});return
+            elif self.path=='/api/thread-attachments/link':self.send(self.server.attachments.link(d['id'],d['attachment'],d['key'],d.get('leaf')));return
             elif self.path=='/api/settings':a.save_settings(d)
             elif self.path=='/api/remote-status/check':self.send(self.server.deletions.check_remote(d.get('id')));return
             elif self.path=='/api/connection/open-folder':

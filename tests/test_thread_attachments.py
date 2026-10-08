@@ -38,6 +38,30 @@ class Attachments(unittest.TestCase):
   folder=self.documents();(folder/'report.md').write_text('![Image](private.png)');(folder/'private.png').write_bytes(fixtures.PNG);self.data['mapping']['n4']['message']['content']['parts']=['[report](attachments/report.md)'];self.save();item=self.docs.public(self.cid)['attachments'][0]
   with self.assertRaises(FileNotFoundError):self.docs.relative(self.cid,item['id'],'private.png')
   self.data['mapping']['n4']['message']['content']['parts'].append('![Owned](attachments/private.png)');self.save();item=self.docs.public(self.cid)['attachments'][0];self.assertEqual(self.docs.relative(self.cid,item['id'],'private.png'),folder/'private.png')
+ def test_cross_chat_downloaded_copy_requires_selection_and_persists(self):
+  from preferences import attach
+  folder=self.documents();attach(self.a,self.root/'preferences.json')
+  (folder/'other').mkdir();copy=folder/'other/workspace (7)(4).md';copy.write_text('# Downloaded revision')
+  (folder/'library-index.json').write_text(json.dumps({'schema':'chatgpt-library-index/v1','entries':[dict(id='copy-id',name=copy.name,path='attachments/other/'+copy.name,conversation_ids=['other-chat'])]}))
+  self.data['mapping']['n4']['message']['content']['parts']=['[Workspace (7)(4)](sandbox:/workspace/scratch/Workspace_7_4.md)'];self.save()
+  item=self.docs.public(self.cid)['attachments'][0];self.assertFalse(item['available']);self.assertEqual(len(item['candidates']),1)
+  with self.assertRaises(ValueError):self.docs.link(self.cid,item['id'],'unrelated-key')
+  self.docs.link(self.cid,item['id'],item['candidates'][0]['key']);item=self.docs.public(self.cid)['attachments'][0];self.assertTrue(item['available']);self.assertTrue(item['local_copy']);self.assertEqual(item['size'],copy.stat().st_size)
+  with patch.object(self.files,'refresh',side_effect=AssertionError('No rescan during delivery')):self.assertEqual(self.docs.file(self.cid,item['id']),copy)
+  self.assertTrue(json.loads((self.root/'preferences.json').read_text())['settings']['attachmentLinks'])
+  recreated=ThreadAttachments(self.a,self.files);self.assertTrue(recreated.public(self.cid)['attachments'][0]['available'])
+  copy.write_text('# Changed revision')
+  item=recreated.public(self.cid)['attachments'][0];self.assertFalse(item['available']);self.assertTrue(item['candidates'])
+ def test_repeated_sandbox_reference_preserves_original_filename_alias(self):
+  folder=self.documents();path=folder/'canon_core_front_matter (9)(1).md';path.write_text('Downloaded canon')
+  (folder/'library-index.json').write_text(json.dumps({'schema':'chatgpt-library-index/v1','entries':[dict(id='canon',name=path.name,path='attachments/'+path.name,conversation_ids=['another-chat'])]}))
+  self.data['mapping']['n4']['message']['content']['parts']=['[Canon Organizer](sandbox:/scratch/Canon_Organizer.md)']
+  self.data['mapping']['n240']['message']['content']['parts']=['[canon_core_front_matter (9)(1).md](sandbox:/scratch/Canon_Organizer.md)'];self.save()
+  item=self.docs.public(self.cid)['attachments'][0];self.assertFalse(item['available']);self.assertEqual(item['candidates'][0]['name'],path.name)
+ def test_parenthesized_markdown_destination_is_complete(self):
+  folder=self.documents();path=folder/'report(7)(4).md';path.write_text('Saved')
+  self.data['mapping']['n4']['message']['content']['parts']=['[Report](attachments/report(7)(4).md)'];self.save()
+  item=self.docs.public(self.cid)['attachments'][0];self.assertTrue(item['available']);self.assertEqual(self.docs.file(self.cid,item['id']),path)
  def test_http_copy_and_attachment_require_session(self):
   folder=self.documents();(folder/'report.txt').write_text('actual bytes');self.data['mapping']['n4']['message']['content']['parts']=['[report](attachments/report.txt)'];self.save();server=Server(('127.0.0.1',0),self.a);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start();c=http.client.HTTPConnection('127.0.0.1',server.server_port)
   try:

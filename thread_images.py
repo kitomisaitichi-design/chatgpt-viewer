@@ -77,9 +77,10 @@ class ThreadImages:
                     item=by_target[identity]
                     if seq is not None and seq not in item['sequences']:item['sequences'].append(seq)
                     if ref not in item['references']:item['references'].append(ref)
+                    if name and name not in item['names']:item['names'].append(name)
                     return
                 ident=hashlib.sha256((cid+'\0'+identity).encode()).hexdigest()[:24]
-                item=dict(id=ident,name=(file['name'] if file else name or Path(ref).name),seq=seq,node_id=node_id,sequences=[] if seq is None else [seq],references=[ref],file_key=file['key'] if file else None,path=ref if not file else None,target=target,root=file['root'] if file else None,expected=file.get('size') if file else None,source='Library' if file and 'library' in file['sources'] else 'Chat')
+                item=dict(id=ident,name=(file['name'] if file else name or Path(ref).name),seq=seq,node_id=node_id,sequences=[] if seq is None else [seq],references=[ref],names=[name] if name else [],file_key=file['key'] if file else None,path=ref if not file else None,target=target,root=file['root'] if file else None,expected=file.get('size') if file else None,source='Library' if file and 'library' in file['sources'] else 'Chat')
                 items.append(item);by_target[identity]=item
             for row in rows:
                 if not row['visible']:continue
