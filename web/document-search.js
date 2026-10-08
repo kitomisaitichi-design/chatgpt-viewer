@@ -26,7 +26,7 @@ globalThis.DocumentSearch=(()=>{
    if(nodes.length)text+=separator;nodes.push({node,start:text.length,end:text.length+node.textContent.length});text+=node.textContent;
   }
   function locate(offset,end=false){let lo=0,hi=nodes.length;while(lo<hi){const mid=(lo+hi)>>1;if(end?nodes[mid].end<offset:nodes[mid].end<=offset)lo=mid+1;else hi=mid;}return nodes[lo];}
-  return {text,range(hit){const first=locate(hit.start),last=locate(hit.end,true);if(!first||!last)return null;const range=document.createRange();range.setStart(first.node,Math.max(0,hit.start-first.start));range.setEnd(last.node,hit.end-last.start);return range;}};
+  const ranges=new Map();return {text,range(hit){const key=hit.start+':'+hit.end;if(ranges.has(key))return ranges.get(key);const first=locate(hit.start),last=locate(hit.end,true);if(!first||!last)return null;const range=document.createRange();range.setStart(first.node,Math.max(0,hit.start-first.start));range.setEnd(last.node,hit.end-last.start);if(ranges.size<10000)ranges.set(key,range);return range;}};
  }
  function clear(){if(globalThis.CSS?.highlights){CSS.highlights.delete('document-matches');CSS.highlights.delete('document-current');}}
  function paint(snapshot,hits,index,all=true,scroller=null,reveal=true){

@@ -23,6 +23,10 @@ def message_files(message):
 def kind(name):
     suffix=Path(name).suffix.lower()
     if suffix in IMAGE_EXT:return 'image'
+    if suffix in ('.html','.htm'):return 'html'
+    if suffix in ('.mp3','.ogg','.oga','.wav','.m4a','.ma4','.aac','.flac'):return 'audio'
+    if suffix in ('.mp4','.m4v','.webm','.ogv'):return 'video'
+    if suffix in ('.mid','.midi'):return 'midi'
     if suffix=='.pdf':return 'pdf'
     if suffix=='.docx':return 'word'
     if suffix in ('.xlsx','.xls','.csv','.tsv'):return 'sheet'
@@ -113,7 +117,7 @@ class ThreadAttachments(ThreadImages):
         result['attachments']=result.pop('images');return result
     def file(self,cid,image_id,leaf=None):
         path=self.original(cid,image_id,leaf)
-        if path.stat().st_size>64*1024*1024:raise ValueError('Preview limit is 64 MiB. Open the original file instead.')
+        if kind(path.name) not in ('audio','video') and path.stat().st_size>64*1024*1024:raise ValueError('Preview limit is 64 MiB. Open the original file instead.')
         if path.suffix.lower() in ('.docx','.xlsx'):
             with zipfile.ZipFile(path) as z:
                 info=z.infolist()

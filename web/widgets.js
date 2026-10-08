@@ -6,10 +6,10 @@ window.SavedWidgets=(()=>{
  const colors=['#5297ee','#59b56b','#ee8b43','#bd84ea','#ed6e8a','#48babe'],frames=new Map();
  window.addEventListener('message',event=>{const frame=frames.get(event.data?.viewerFrame);if(!frame)return;if(!frame.isConnected){frames.delete(event.data.viewerFrame);return;}if(event.source!==frame.contentWindow)return;const height=Number(event.data.height);if(Number.isFinite(height))frame.style.height=Math.max(320,Math.min(5000,height+36))+'px';});
  const svgNode=(tag,attrs,text)=>{const e=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [key,value] of Object.entries(attrs||{}))e.setAttribute(key,String(value));if(text!==undefined)e.textContent=String(text);return e;};
- function extract(text){const widgets=[];text=text.replace(/\ue200genui\ue202([\s\S]*?)\ue201/g,(raw,json,offset)=>{
+ function extract(text){const widgets=[];text=text.replace(/\ue200(genui|image_group)\ue202([\s\S]*?)\ue201/g,(raw,type,json,offset)=>{
   // Literal examples inside fenced code remain literal examples.
   let fence='';for(const line of text.slice(0,offset).split('\n')){const m=line.match(/^\s*(`{3,}|~{3,})/);if(m){if(!fence)fence=m[1][0];else if(fence===m[1][0])fence='';}}if(fence)return raw;
-  try{const w=JSON.parse(json);if(w.citation)return raw;return 'OFFLINEWIDGETPLACEHOLDER'+(widgets.push(w)-1)+'END';}
+  try{const spec=JSON.parse(json),w=type==='image_group'?{image_group:spec}:spec;if(w.citation)return raw;return 'OFFLINEWIDGETPLACEHOLDER'+(widgets.push(w)-1)+'END';}
   catch{return 'OFFLINEWIDGETPLACEHOLDER'+(widgets.push({unavailable:{title:'Incomplete saved widget',raw}})-1)+'END';}
  });
  // A long message may arrive in fragments. Do not show half a JSON document.
@@ -67,7 +67,7 @@ window.SavedWidgets=(()=>{
   const styles=getComputedStyle(document.documentElement),params=new URLSearchParams({id:context.cid,seq:context.seq,widget:context.index,nonce,...(S.leaf?{leaf:S.leaf}:{})});for(const [key,source] of [['bg','bg'],['text','text'],['muted','muted'],['border','border'],['card','panel'],['accent','accent']])params.set(key,styles.getPropertyValue('--'+source).trim());iframe.src='/api/app-frame?'+params;
   iframe.onload=()=>iframe._wasConnected=true;card.append(iframe,n('p','widget-footer','Saved interactive app · runs locally'));source(card,content,'html','App source');return card;
  }
- function render(value,context={}){try{if(value.charts_widget_v2){const spec=value.charts_widget_v2.content;return chart(typeof spec==='string'?JSON.parse(spec):spec||{});}if(value.app_block)return application(value.app_block,context);}catch(error){const card=n('section','saved-widget');card.append(n('strong','','Saved widget'),n('p','muted','The saved widget could not be drawn. Its source is available below.'));source(card,value);return card;}
+ function render(value,context={}){try{if(value.image_group)return RichMedia.group(value.image_group,context);if(value.charts_widget_v2){const spec=value.charts_widget_v2.content;return chart(typeof spec==='string'?JSON.parse(spec):spec||{});}if(value.app_block)return application(value.app_block,context);}catch(error){const card=n('section','saved-widget');card.append(n('strong','','Saved widget'),n('p','muted','The saved widget could not be drawn. Its source is available below.'));source(card,value);return card;}
   const card=n('section','saved-widget');card.append(n('strong','',value.unavailable?.title||'Saved widget'));if(!value.unavailable)source(card,value);return card;
  }
  return {extract,render};

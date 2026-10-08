@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.25'
+VERSION = '1.1.26'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -1312,7 +1312,7 @@ class Handler(BaseHTTPRequestHandler):
             body=gzip.compress(body,compresslevel=3,mtime=0);headers.update({'Content-Encoding':'gzip','Vary':'Accept-Encoding'})
         self.send_response(status);self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(len(body)))
         self.send_header('X-Content-Type-Options','nosniff');self.send_header('Cache-Control',headers.pop('Cache-Control','no-store'))
-        self.send_header('Content-Security-Policy',headers.pop('Content-Security-Policy',"default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"))
+        self.send_header('Content-Security-Policy',headers.pop('Content-Security-Policy',"default-src 'self'; script-src 'self' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; media-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"))
         for k,v in (headers or {}).items():self.send_header(k,v)
         endpoint=urllib.parse.urlsplit(self.path).path;track=endpoint in ('/api/state','/api/catalog','/api/messages')
         key=id(self);record=dict(endpoint=endpoint,bytes=len(body),written=0,encoding=headers.get('Content-Encoding','identity'),started=time.monotonic())
@@ -1340,10 +1340,28 @@ class Handler(BaseHTTPRequestHandler):
         return bool(token and secrets.compare_digest(token.value,self.server.token))
     def stream_file(self,path,inline=False):
         with path.open('rb') as stream:
-            self.send_response(200);self.send_header('Content-Type',(mimetypes.guess_type(path.name)[0] or 'application/octet-stream') if inline else 'application/octet-stream');self.send_header('Content-Length',str(os.fstat(stream.fileno()).st_size));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'none'; sandbox")
+            size=os.fstat(stream.fileno()).st_size;start=0;end=size-1;status=200
+            value=self.headers.get('Range','')
+            if value:
+                match=re.fullmatch(r'bytes=(\d*)-(\d*)',value)
+                if match and any(match.groups()):
+                    left,right=match.groups()
+                    if left:start=int(left);end=min(end,int(right)) if right else end
+                    elif int(right)>0:start=max(0,size-int(right))
+                    else:start=size
+                    if start<=end and start<size:status=206
+                    else:status=416
+                else:status=416
+            if status==416:self.send(b'',416,'text/plain',{'Content-Range':'bytes */'+str(size),'Accept-Ranges':'bytes'});return
+            mime={'.mp3':'audio/mpeg','.mp4':'video/mp4','.m4v':'video/mp4','.ogg':'audio/ogg','.oga':'audio/ogg','.wav':'audio/wav','.m4a':'audio/mp4','.ma4':'audio/mp4','.aac':'audio/aac','.flac':'audio/flac','.webm':'video/webm','.ogv':'video/ogg'}.get(path.suffix.lower(),mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+            self.send_response(status);self.send_header('Content-Type',mime if inline else 'application/octet-stream');self.send_header('Content-Length',str(max(0,end-start+1)));self.send_header('Accept-Ranges','bytes');self.send_header('Cache-Control','private, max-age=60' if inline else 'no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Content-Security-Policy',"default-src 'none'; sandbox")
+            if status==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
             if not inline:self.send_header('Content-Disposition',"attachment; filename*=UTF-8''"+urllib.parse.quote(path.name))
-            self.end_headers()
-            while part:=stream.read(128*1024):self.wfile.write(part)
+            self.end_headers();stream.seek(start);remaining=end-start+1
+            while remaining>0:
+                part=stream.read(min(128*1024,remaining))
+                if not part:break
+                self.wfile.write(part);remaining-=len(part)
     def do_GET(self):
         try:
             url=urllib.parse.urlsplit(self.path);q={k:v[-1] for k,v in urllib.parse.parse_qs(url.query).items()}
@@ -1378,7 +1396,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if url.path=='/api/thread-attachments/content':
                 with a.foreground_read():f=(self.server.attachments.original if q.get('original')=='1' else self.server.attachments.file)(q['id'],q['attachment'],q.get('leaf'))
-                self.stream_file(f,False);return
+                from thread_attachments import kind
+                playable=q.get('play')=='1' and kind(f.name) in ('audio','video')
+                self.stream_file(f,playable);return
             if url.path=='/api/thread-attachments/relative':
                 with a.foreground_read():f=self.server.attachments.relative(q['id'],q['attachment'],q['path'],q.get('leaf'))
                 self.stream_file(f,True);return
@@ -1471,6 +1491,7 @@ class Handler(BaseHTTPRequestHandler):
                 html=file.read_text(encoding='utf-8')
                 html=re.sub(r'<meta http-equiv="Content-Security-Policy"[^>]*>','',html)
                 def bundle(match):
+                    if q.get('format')=='html' and match[1].startswith('vendor/documents/'):return ''
                     script=(APP/'web'/match[1]).read_text(encoding='utf-8').replace('</script','<\\/script')
                     return '<script nonce="'+nonce+'">'+script+'</script>'
                 html=re.sub(r'<script defer src="([^"\n]+)"></script>',bundle,html)

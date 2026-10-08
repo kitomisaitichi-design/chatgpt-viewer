@@ -5,7 +5,7 @@ class Element {
 }
 let observed,observe,requests=[];
 const state={selected:{id:'one'},leaf:null,chatById:new Map()};
-const context={window:{},document:{getElementById(){return {};},createElement(tag){return new Element(tag);},addEventListener(){}},ViewerIcons:{svg(name){const icon=new Element('svg');icon.icon=name;return icon;},set(){}},IntersectionObserver:class{constructor(fn){observe=fn;}observe(host){observed=host;}unobserve(){}},S:state,URLSearchParams,Map,Set,Date,addEventListener(){},api:()=>new Promise((resolve,reject)=>requests.push({resolve,reject}))};
+const context={ThreadImages:{cleanReferences(){}},window:{},document:{getElementById(){return {};},createElement(tag){return new Element(tag);},addEventListener(){}},ViewerIcons:{svg(name){const icon=new Element('svg');icon.icon=name;return icon;},set(){}},IntersectionObserver:class{constructor(fn){observe=fn;}observe(host){observed=host;}unobserve(){}},S:state,URLSearchParams,Map,Set,Date,addEventListener(){},api:()=>new Promise((resolve,reject)=>requests.push({resolve,reject}))};
 vm.createContext(context);vm.runInContext(fs.readFileSync(path.join(__dirname,'../web/thread-attachments.js'),'utf8'),context);
 const preview=context.window.ThreadAttachments,tick=()=>new Promise(resolve=>setImmediate(resolve));
 async function run(){

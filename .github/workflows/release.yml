@@ -39,6 +39,8 @@ jobs:
           node tests/check_thread_images.js
           node tests/check_attachments.js
           node tests/check_document_search.js
+          node tests/check_rich_media.js
+          node tests/check_media_player.js
           node tests/check_organization.mjs
           node tests/check_browser_connection.mjs
       - name: Build and publish ZIP and checksum
