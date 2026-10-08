@@ -2,6 +2,7 @@
 setlocal
 cd /d "%~dp0"
 title Offline Chat Viewer
+if exist ".viewer-data\pending-update.json" powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0apply-update.ps1"
 if exist ".semantic-env\Scripts\python.exe" (
   ".semantic-env\Scripts\python.exe" viewer.py %*
   goto done

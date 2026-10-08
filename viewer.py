@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.27'
+VERSION = '1.1.28'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -1259,6 +1259,8 @@ class Server(ThreadingHTTPServer):
         self.deletions.start()
         self.native.deletion_queue.start()
         self.queue_lock=threading.RLock()
+        from release_checks import ReleaseChecks
+        self.releases=ReleaseChecks(archive,VERSION)
     def deletion_status(self):
         value=self.deletions.status();catalog=dict(self.archive.ui_cache['chats']) if self.archive.ui_cache else {c['id']:c for c in self.archive.catalog()}
         for row in self.native.deletion_queue.rows():
@@ -1413,6 +1415,7 @@ class Handler(BaseHTTPRequestHandler):
                 f,entry=self.server.files.file(q.get('key',''));inline=q.get('inline')=='1' and f.suffix.lower() in IMAGE_EXT
                 self.stream_file(f,inline)
                 return
+            if url.path=='/api/releases':self.send(self.server.releases.status());return
             if url.path=='/api/health':self.send(dict(ok=True,version=VERSION,pid=os.getpid(),scanning=a.status.get('scanning',False),transfers=self.server.transfer_status()));return
             if url.path=='/api/state':self.send(a.state(q.get('since'),5,q.get('priority','')));return
             if url.path=='/api/catalog':self.send(a.catalog_batch(q.get('offset',0),q.get('limit',25),q.get('priority','')));return
@@ -1540,7 +1543,13 @@ class Handler(BaseHTTPRequestHandler):
                     root=tk.Tk();root.withdraw();root.attributes('-topmost',True);folder=filedialog.askdirectory(title='Choose your exported chats folder',initialdir=d.get('path') or str(APP));root.destroy()
                 self.send({'path':folder});return
             elif self.path=='/api/thread-attachments/link':self.send(self.server.attachments.link(d['id'],d['attachment'],d['key'],d.get('leaf')));return
-            elif self.path=='/api/settings':a.save_settings(d)
+            elif self.path=='/api/releases/check':self.send(self.server.releases.check());return
+            elif self.path=='/api/settings':
+                if 'silentUpdates' in d and type(d['silentUpdates']) is not bool:raise ValueError('Silent updates must be on or off')
+                if 'releaseCheckHours' in d:
+                    from release_checks import interval
+                    if type(d['releaseCheckHours']) is not int or d['releaseCheckHours'] not in (0,12,24,168):raise ValueError('Choose 12h, 24h, weekly or off')
+                a.save_settings(d);self.server.releases.reschedule()
             elif self.path=='/api/remote-status/check':self.send(self.server.deletions.check_remote(d.get('id')));return
             elif self.path=='/api/connection/open-folder':
                 folder=Path(self.server.deletions.browser.setup()['folder'])
@@ -1600,6 +1609,7 @@ def main():
     a.enable_ui_cache();root=args.root if args.root!=str(APP) else settings.get('scan_start',args.root);up=args.up if args.up is not None else settings.get('scan_up',2)
     server=Server(('127.0.0.1',args.port),a);url=f'http://127.0.0.1:{server.server_port}/?token={server.token}'
     server.backup.start_scheduler()
+    if not args.isolated:server.releases.start()
     if not args.isolated and settings.get('nativeCodexEnabled',True):server.native.start()
     (a.data_dir/'session.json').write_text(json.dumps({'url':url,'pid':os.getpid()}))
     print('Offline Chat Viewer is running. Close this window to stop.\n'+url,flush=True)
@@ -1614,6 +1624,6 @@ def main():
     if not args.no_browser:threading.Thread(target=webbrowser.open,args=(url,),daemon=True).start()
     try:server.serve_forever()
     except KeyboardInterrupt:pass
-    finally:server.native.close();server.deletions.close();server.backup.close();a.close();server.server_close()
+    finally:server.releases.close();server.native.close();server.deletions.close();server.backup.close();a.close();server.server_close()
 
 if __name__=='__main__':main()
