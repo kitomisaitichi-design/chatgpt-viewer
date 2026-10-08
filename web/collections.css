@@ -27,3 +27,8 @@
 @media(max-width:700px){#trash-panel{padding:16px}.trash-tools{gap:5px}.trash-bulk{font-size:10px}.collection-badge{width:38px;height:38px}.trash-row .trash-title{font-size:12px}}
 
 
+
+/* Keep loading text softly breathing without restarting it on status polls. */
+.delete-job:is(.running,.preparing,.retrying,.waiting) :is(.delete-job-state,.delete-job-title){animation:queue-text-breathe 2.8s ease-in-out infinite}
+@keyframes queue-text-breathe{0%,100%{opacity:1}50%{opacity:.66}}
+@media(prefers-reduced-motion:reduce){.delete-job:is(.running,.preparing,.retrying,.waiting) :is(.delete-job-state,.delete-job-title){animation:none}}

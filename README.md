@@ -1,11 +1,11 @@
-# Offline Chat Viewer · v1.1.21
+# Offline Chat Viewer · v1.1.22
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.21-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.21/Offline-Chat-Viewer-v1.1.21-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.21/Offline-Chat-Viewer-v1.1.21-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.22-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.22/Offline-Chat-Viewer-v1.1.22-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.22/Offline-Chat-Viewer-v1.1.22-Windows.zip.sha256.txt)
 
 ## Quick start
 
@@ -14,7 +14,7 @@ A local ChatGPT-style reader for your Markdown and JSON exports. The standard vi
 3. Choose the complete ChatGPT Exporter backup folder, containing `json`, `markdown` and `attachments`. Saved chats and linked files load locally.
 4. Keep the old application folder until the update is working. Shared preferences migrate across versions; retain `.viewer-data` when updating in place.
 
-[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.21) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
+[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.22) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
 
 ## What the viewer does
 
@@ -354,6 +354,7 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 
 | Version | Recorded changes |
 | --- | --- |
+| **1.1.22** | Eight new themes; alphabetized, scrollable theme palette with swatches and polished selection/focus states. |
 | **1.1.21** | Re-queue older completed Library jobs to remove their leftover local transcripts using the existing verified receipt. |
 | **1.1.20** | Actual local transcript/index/Trash removal, distinct native retention modes, local-only cleanup retries, animated Trash/queue UI, and improved attachment/missing-image cards. |
 | **1.1.19** | Combined sidebar, draggable nested organization priorities, saved display options, readable source labels, and recovery of native project names from sparse handoffs. |
@@ -390,3 +391,11 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 | **1.0.2** | Selected-chat priority; separate background indexing; early manifest coverage; bounded recent-chat cache and paged messages; obsolete-request cancellation and retry. |
 | **1.0.1** | Correct script MIME types; usable folder controls during delayed startup; overlapping discovery/indexing with checkpoints, pause/cancel and persisted scan scope. |
 | **1.0.0** | Initial portable local Markdown/JSON/Codex reader; branches, model receipts, math/tables/code, archive search, categories/pins/preferences and optional semantic search. |
+
+### Theme palette
+
+Choose the palette icon in the thread toolbar for twelve presets and Custom colors, all alphabetized. Amber, Aurora, Cobalt, Forest, Lavender, Rose, Sepia and Slate join the existing themes. Scroll the choices while the heading and Close stay visible. Settings uses the same choices; saved selections follow updates. The light-bulb toggle remembers your previous dark theme.
+
+Deletion progress now scrolls automatically to each advancing job, without a Follow progress button. Active row text gently pulses in opacity; reduced-motion settings are honored.
+
+Completed deletion rows briefly show a checkmark, then collapse out of the queue. Existing completed receipts stay out of the pending list; the queue button hides when nothing remains pending. Verification receipts remain stored for safe retries.
