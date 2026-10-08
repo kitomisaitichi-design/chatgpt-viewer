@@ -1,11 +1,11 @@
-# Offline Chat Viewer · v1.1.24
+# Offline Chat Viewer · v1.1.25
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.24-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.24/Offline-Chat-Viewer-v1.1.24-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.24/Offline-Chat-Viewer-v1.1.24-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.25-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.25/Offline-Chat-Viewer-v1.1.25-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.25/Offline-Chat-Viewer-v1.1.25-Windows.zip.sha256.txt)
 
 ## Quick start
 
@@ -14,7 +14,7 @@ A local ChatGPT-style reader for your Markdown and JSON exports. The standard vi
 3. Choose the complete ChatGPT Exporter backup folder, containing `json`, `markdown` and `attachments`. Saved chats and linked files load locally.
 4. Keep the old application folder until the update is working. Shared preferences migrate across versions; retain `.viewer-data` when updating in place.
 
-[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.24) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
+[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.25) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
 
 ## What the viewer does
 
@@ -354,7 +354,7 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 
 | Version | Recorded changes |
 | --- | --- |
-| **1.1.24** | Open downloaded Library copies for unresolved sandbox links; remember explicit selections and detect changed local copies. |
+| **1.1.25** | Open downloaded Library copies for unresolved sandbox links; remember explicit selections and detect changed local copies. |
 | **1.1.23** | Reuse matching verified receipts across portable app databases for local orphan cleanup; locate linked JSON backups when Markdown is primary. |
 | **1.1.22** | Eight new themes; alphabetized, scrollable theme palette with swatches and polished selection/focus states. |
 | **1.1.21** | Re-queue older completed Library jobs to remove their leftover local transcripts using the existing verified receipt. |
