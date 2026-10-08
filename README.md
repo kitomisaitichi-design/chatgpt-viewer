@@ -1,11 +1,11 @@
-# Offline Chat Viewer · v1.1.20
+# Offline Chat Viewer · v1.1.21
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.20-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.20/Offline-Chat-Viewer-v1.1.20-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.20/Offline-Chat-Viewer-v1.1.20-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.21-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.21/Offline-Chat-Viewer-v1.1.21-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.21/Offline-Chat-Viewer-v1.1.21-Windows.zip.sha256.txt)
 
 ## Quick start
 
@@ -14,7 +14,7 @@ A local ChatGPT-style reader for your Markdown and JSON exports. The standard vi
 3. Choose the complete ChatGPT Exporter backup folder, containing `json`, `markdown` and `attachments`. Saved chats and linked files load locally.
 4. Keep the old application folder until the update is working. Shared preferences migrate across versions; retain `.viewer-data` when updating in place.
 
-[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.20) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
+[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.21) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
 
 ## What the viewer does
 
@@ -354,6 +354,7 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 
 | Version | Recorded changes |
 | --- | --- |
+| **1.1.21** | Re-queue older completed Library jobs to remove their leftover local transcripts using the existing verified receipt. |
 | **1.1.20** | Actual local transcript/index/Trash removal, distinct native retention modes, local-only cleanup retries, animated Trash/queue UI, and improved attachment/missing-image cards. |
 | **1.1.19** | Combined sidebar, draggable nested organization priorities, saved display options, readable source labels, and recovery of native project names from sparse handoffs. |
 | **1.1.18** | One native Connect button; app-owned Windows ChatGPT sign-in window with persistent private session; no browser extension or pairing setup; native queue ownership fenced from obsolete exporter adapters. |

@@ -67,6 +67,12 @@ class CollectionsNative(unittest.TestCase):
   cid,_=self.chat();q=self.queue();q.enqueue([cid]);row=self.run_queue(q);receipt=dict(schema=SCHEMA,id=row['id'],cid=cid,scope='wrong',run=row['run'],state='confirmed',verified=True);path=self.root/'.viewer-queue/receipts'/(row['id']+'.json');write(path,receipt);q.tick();self.assertEqual(q.rows()[0]['state'],'waiting')
   receipt['scope']=row['scope'];receipt['verified']=False;write(path,receipt);q.tick();self.assertEqual(q.rows()[0]['state'],'waiting')
   receipt['verified']=True;receipt['run']='old-run';write(path,receipt);q.tick();self.assertEqual(q.rows()[0]['state'],'waiting')
+ def test_legacy_completed_library_job_can_retry_leftover_local_transcript(self):
+  cid,p=self.chat();q=self.queue();q.enqueue([cid],mode='preserve');row=self.run_queue(q);self.receipt(row);q.tick()
+  with self.a.connect() as db:db.execute("UPDATE deletion_jobs SET mode='library' WHERE id=?",(row['id'],))
+  q.enqueue([cid],mode='library');self.assertEqual(q.rows()[0]['state'],'failed')
+  with patch.object(q,'start'),patch.object(q,'snapshot',side_effect=AssertionError('No second remote request')):q.action('run',[row['id']]);q.tick()
+  self.assertFalse(p.exists());self.assertEqual(self.a.catalog(),[]);self.assertEqual(q.rows()[0]['state'],'confirmed')
  def test_unavailable_preserve_keeps_local_copy(self):
   cid,p=self.chat();q=self.queue();q.enqueue([cid],mode='preserve');row=self.run_queue(q)
   with patch.object(q,'cleanup') as cleanup:self.receipt(row,remote_state='unavailable');q.tick();cleanup.assert_not_called()

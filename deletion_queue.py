@@ -106,6 +106,13 @@ class DeletionQueue:
             for cid,c,root,scope in prepared:
                 old=db.execute('SELECT state,mode,receipt FROM deletion_jobs WHERE scope=? AND cid=?',(scope,cid)).fetchone()
                 if old and old['state']!='cancelled':
+                    if old['state']=='confirmed' and mode=='library':
+                        proof=json.loads(old['receipt'] or '{}')
+                        if proof.get('verified') is not True or proof.get('state')!='confirmed':raise ValueError('The previous remote result needs verification before local cleanup')
+                        # Older builds called Library-only cleanup complete while
+                        # retaining the transcript. Let its reviewed local retry
+                        # reuse the receipt even when the mode already matches.
+                        db.execute("UPDATE deletion_jobs SET state='failed',error='' WHERE scope=? AND cid=?",(scope,cid))
                     if old['mode']!=mode:
                         if old['state']=='confirmed' and mode=='library':
                             db.execute("UPDATE deletion_jobs SET state='failed' WHERE scope=? AND cid=?",(scope,cid))
