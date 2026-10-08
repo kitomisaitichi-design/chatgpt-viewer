@@ -18,15 +18,26 @@ Read, search and organize saved **ChatGPT, ChatGPT Work and Codex** conversation
 
 The Windows download includes **Python and offline rendering assets**. Standard reading needs no installer, subscription, API key, CDN or package setup. Optional online features remain under your control.
 
-## A quick tour
+## See the Viewer in action
 
-![Animated Viewer feature tour](docs/media/viewer-tour.gif)
+![Actual Viewer reading interface](docs/media/interface-reading.gif)
 
-*1600 × 900 illustrated feature tour. These are explanatory visuals, not a recording of a personal archive. Full-resolution assets are linked directly above.*
+**Real interface, real controls.** These short walkthroughs use a separate demonstration archive. Each GIF is 1600 pixels wide; open it for full resolution. Captions explain the recorded steps, and no personal chat data is shown.
+
+**[Browse all eight interface demos](docs/SHOWCASE.md)** · [Search](#find-what-matters) · [Organization](#a-sidebar-that-fits-your-archive) · [Documents and media](#documents-images-and-rich-media) · [Themes](#make-it-comfortable) · [Backups](#backups-and-portability)
+
+<details>
+<summary>Illustrated overview and release settings</summary>
+
+![Illustrated feature overview](docs/media/viewer-tour.gif)
+
+*Explanatory illustration; the interface demos above and below are actual Viewer captures.*
 
 ![Viewer release settings](docs/media/update-settings.png)
 
-*Actual Viewer Settings with demonstration data. Check schedules and silent installation are independent of backups and export rescans.*
+*Release checks and optional silent installation are independent of backups and export rescans.*
+
+</details>
 
 ## Get started
 
@@ -52,6 +63,10 @@ Keep `.viewer-data` when updating in place. Shared preferences live separately u
 
 ### Find what matters
 
+![Search saved messages and jump to a match](docs/media/interface-search.gif)
+
+*Search across the archive, review snippets, and jump straight to the matching message.*
+
 - Fast local text search across saved chats, with phrase and title matching, result sorting and filters.
 - Find within a conversation and navigate matching messages.
 - Find inside supported documents, including repeated next/previous traversal, a match counter, case sensitivity, whole words, regex and highlight-all controls.
@@ -60,6 +75,10 @@ Keep `.viewer-data` when updating in place. Shared preferences live separately u
 - Reuse indexes, extracted document text and cached previews to avoid repeating expensive work.
 
 ### A sidebar that fits your archive
+
+![Customize organization and pin conversations](docs/media/interface-organization.gif)
+
+*Arrange sections, adjust density, hide empty groups and keep useful conversations pinned.*
 
 - Organized sections for pins, bookmarks, native ChatGPT projects, local folders/categories, Chats, Work and Codex.
 - Keep native project membership separate from local organization and disk source folders.
@@ -70,6 +89,18 @@ Keep `.viewer-data` when updating in place. Shared preferences live separately u
 - Reversible **Trash** with search, selection, select-all, bulk restore and reviewed deletion actions.
 
 ### Documents, images and rich media
+
+![Document preview and persistent find controls](docs/media/interface-documents.gif)
+
+*Find, count and traverse document matches with case, word, regex and highlight options.*
+
+![Navigate saved images and loop through the thread](docs/media/interface-images.gif)
+
+*Browse the thread’s available images without losing their original conversation context.*
+
+![Local audio playback controls](docs/media/interface-media.gif)
+
+*Actual local audio playback: pause, resume, repeat and speed controls. The sample tone is demonstration content.*
 
 - File cards show real names, available sizes/types and saved/unavailable state; import or link an already downloaded copy when supported.
 - Preview supported PDF, Office, Markdown, text/code, spreadsheet and HTML documents with local renderer assets and appropriate fallback actions.
@@ -84,6 +115,10 @@ Keep `.viewer-data` when updating in place. Shared preferences live separately u
 
 ### Make it comfortable
 
+![Switch themes across the complete interface](docs/media/interface-themes.gif)
+
+*Aurora, Light and Midnight shown in the same workspace; the theme applies across the app.*
+
 - Alphabetically ordered, scrollable theme picker with **Amber, Aurora, ChatGPT dark, Cobalt, Forest, Light, Lavender, Midnight, Pure black, Rose, Sepia and Slate**, plus custom colors.
 - Adjust accent, background, sidebar and text colors, font size and reading width.
 - Configure messages per page, timestamps, remembered reading position and recurring export rescan intervals.
@@ -91,6 +126,10 @@ Keep `.viewer-data` when updating in place. Shared preferences live separately u
 - Subtle activity animation respects reduced-motion preferences; deletion progress scrolls automatically and completed items leave the active queue.
 
 ### Backups and portability
+
+![Backup content, schedules and ZIP import controls](docs/media/interface-backups.gif)
+
+*Choose what to keep, configure idle/power rules and integrate saved ZIPs. This demo shows configuration, not a completed Drive upload.*
 
 - Local backups and snapshots retain conversation data and available linked files with verification and manifests.
 - Selective ZIP export and full backup-folder workflows; avoid treating transcript-only packages as complete attachment backups.

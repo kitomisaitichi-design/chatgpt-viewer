@@ -1,0 +1,82 @@
+[
+  {
+    "file": "interface-reading.gif",
+    "title": "Read beautifully",
+    "width": 1600,
+    "height": 984,
+    "frames": 4,
+    "bytes": 216692,
+    "sha256": "f0231598af9c55df609a2bce3e0ffe5b084141090ec50050a593e33f8774fd0d",
+    "capture": "Actual Offline Chat Viewer 1.1.28 UI; synthetic demonstration archive; caption strip added above unchanged capture"
+  },
+  {
+    "file": "interface-search.gif",
+    "title": "Find the thought",
+    "width": 1600,
+    "height": 984,
+    "frames": 4,
+    "bytes": 503128,
+    "sha256": "d48c31cb430e42c5c48b51965e70c9d44d2a83fdb517b72b7db2b41a9b6c659a",
+    "capture": "Actual Offline Chat Viewer 1.1.28 UI; synthetic demonstration archive; caption strip added above unchanged capture"
+  },
+  {
+    "file": "interface-organization.gif",
+    "title": "Make the sidebar yours",
+    "width": 1600,
+    "height": 984,
+    "frames": 5,
+    "bytes": 489384,
+    "sha256": "cdc738a9165820ae751f6ad1cbfe0d13d262b01e05706faa987ce9af7c9403cf",
+    "capture": "Actual Offline Chat Viewer 1.1.28 UI; synthetic demonstration archive; caption strip added above unchanged capture"
+  },
+  {
+    "file": "interface-documents.gif",
+    "title": "Search inside your documents",
+    "width": 1600,
+    "height": 984,
+    "frames": 6,
+    "bytes": 337827,
+    "sha256": "a592bea74ad62114f10eb6d7056bce9526e83aa352c793de063c7e1d2b3a1a91",
+    "capture": "Actual Offline Chat Viewer 1.1.28 UI; synthetic demonstration archive; caption strip added above unchanged capture"
+  },
+  {
+    "file": "interface-images.gif",
+    "title": "Explore images in context",
+    "width": 1600,
+    "height": 984,
+    "frames": 5,
+    "bytes": 514584,
+    "sha256": "59b31001875c6cc4739f7af27bba64ade20a095db7435bc11e4d7de600cd8cf7",
+    "capture": "Actual Offline Chat Viewer 1.1.28 UI; synthetic demonstration archive; caption strip added above unchanged capture"
+  },
+  {
+    "file": "interface-media.gif",
+    "title": "Listen with modern controls",
+    "width": 1600,
+    "height": 684,
+    "frames": 11,
+    "bytes": 1386087,
+    "sha256": "3741bf9a55efe6cbc1fdb318389f6072e337807c5328d746f6544ce7b359715e",
+    "capture": "Actual Offline Chat Viewer 1.1.28 UI; synthetic demonstration archive; caption strip added above unchanged capture"
+  },
+  {
+    "file": "interface-themes.gif",
+    "title": "A theme for every workspace",
+    "width": 1600,
+    "height": 984,
+    "frames": 4,
+    "bytes": 423340,
+    "sha256": "9160493c45a90dcbaf96cd3d435cdd56a576c8f4f1ec1aab51974dc078d3dedf",
+    "capture": "Actual Offline Chat Viewer 1.1.28 UI; synthetic demonstration archive; caption strip added above unchanged capture"
+  },
+  {
+    "file": "interface-backups.gif",
+    "title": "Keep your archive portable",
+    "width": 1600,
+    "height": 984,
+    "frames": 3,
+    "bytes": 408919,
+    "sha256": "36d086b80c6b8d77822ed34cc8d77a1ec2d09bb4ea2ab816b7b902f357f9beb4",
+    "capture": "Actual Offline Chat Viewer 1.1.28 UI; synthetic demonstration archive; caption strip added above unchanged capture"
+  }
+]
