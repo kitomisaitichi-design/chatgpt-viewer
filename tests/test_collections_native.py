@@ -42,13 +42,33 @@ class CollectionsNative(unittest.TestCase):
   row=self.run_queue(q);self.assertTrue(read(self.root/'.viewer-queue/control.json')['enabled']);self.assertEqual(q.rows()[0]['state'],'waiting');self.assertTrue((self.a.data_dir/'deletion-recovery'/row['id']/'conversation.md').is_file())
   command=read(self.root/'.viewer-queue/commands'/(row['id']+'.json'));self.assertEqual(command['content_hash'],'original-exporter-hash')
   with self.assertRaises(ValueError):q.action('run',[row['id']])
-  self.receipt(row);q.tick();self.assertEqual(q.rows()[0]['state'],'confirmed');self.assertTrue(self.a.catalog()[0]['trashed']);self.assertTrue(p.is_file());q.enqueue([cid]);self.assertEqual(len(q.rows()),1)
+  self.receipt(row);q.tick();self.assertEqual(q.rows()[0]['state'],'confirmed');self.assertEqual(self.a.catalog(),[]);self.assertFalse(p.exists());self.assertIn(cid,self.a.state()['removed']);self.assertEqual(len(q.rows()),1)
+ def test_unavailable_library_removes_transcript_and_does_not_rediscover(self):
+  cid,p=self.chat();raw=p.read_bytes();q=self.queue();q.enqueue([cid]);row=self.run_queue(q)
+  self.receipt(row,remote_state='unavailable');q.tick();self.assertEqual(q.rows()[0]['state'],'confirmed');self.assertFalse(p.exists());self.assertEqual(self.a.catalog(),[])
+  p.write_bytes(raw);item=next(self.a.read_items(p));self.a.store(item,p,'stale-worker',self.root,{})
+  self.a.register_manifest(dict(id=cid,json=p.name),self.root/'conversation-index.json',self.root)
+  self.assertEqual(self.a.catalog(),[])
+  with self.a.connect() as db:
+   for table,key in [('chats','id'),('messages','cid'),('chunks','cid'),('titles','cid'),('vectors','cid'),('manifest_entries','cid')]:self.assertEqual(db.execute('SELECT count(*) FROM '+table+' WHERE '+key+'=?',(cid,)).fetchone()[0],0)
+ def test_changed_source_reports_cleanup_failure_and_retry_never_resends_remote(self):
+  cid,p=self.chat();original=p.read_bytes();q=self.queue();q.enqueue([cid]);row=self.run_queue(q);p.write_bytes(original+b' ')
+  self.receipt(row);q.tick();self.assertEqual(q.rows()[0]['state'],'failed');self.assertTrue(p.exists());self.assertEqual(len(self.a.catalog()),1)
+  self.assertIn('changed since backup',q.rows()[0]['error']);p.write_bytes(original)
+  with patch.object(q,'start'),patch.object(q,'snapshot',side_effect=AssertionError('Must reuse verified recovery')):q.action('run',[row['id']]);q.tick()
+  self.assertEqual(q.rows()[0]['state'],'confirmed');self.assertFalse(p.exists());self.assertEqual(self.a.catalog(),[])
+  self.assertFalse((self.root/'.viewer-queue/commands'/(row['id']+'.json')).exists())
+ def test_preserved_completed_chat_can_remove_local_copy_without_another_remote_delete(self):
+  cid,p=self.chat();q=self.queue();q.enqueue([cid],mode='preserve');row=self.run_queue(q);self.receipt(row);q.tick();self.assertTrue(p.exists())
+  q.enqueue([cid],mode='library')
+  with patch.object(q,'start'),patch.object(q,'snapshot',side_effect=AssertionError('Remote deletion already verified')):q.action('run',[row['id']]);q.tick()
+  self.assertEqual(q.rows()[0]['state'],'confirmed');self.assertFalse(p.exists());self.assertEqual(self.a.catalog(),[])
  def test_unverified_wrong_account_and_stale_receipts_cannot_finalize(self):
   cid,_=self.chat();q=self.queue();q.enqueue([cid]);row=self.run_queue(q);receipt=dict(schema=SCHEMA,id=row['id'],cid=cid,scope='wrong',run=row['run'],state='confirmed',verified=True);path=self.root/'.viewer-queue/receipts'/(row['id']+'.json');write(path,receipt);q.tick();self.assertEqual(q.rows()[0]['state'],'waiting')
   receipt['scope']=row['scope'];receipt['verified']=False;write(path,receipt);q.tick();self.assertEqual(q.rows()[0]['state'],'waiting')
   receipt['verified']=True;receipt['run']='old-run';write(path,receipt);q.tick();self.assertEqual(q.rows()[0]['state'],'waiting')
- def test_unavailable_is_not_deleted_and_never_cleans_local_library(self):
-  cid,p=self.chat();q=self.queue();q.enqueue([cid]);row=self.run_queue(q)
+ def test_unavailable_preserve_keeps_local_copy(self):
+  cid,p=self.chat();q=self.queue();q.enqueue([cid],mode='preserve');row=self.run_queue(q)
   with patch.object(q,'cleanup') as cleanup:self.receipt(row,remote_state='unavailable');q.tick();cleanup.assert_not_called()
   chat=self.a.catalog()[0];self.assertEqual(chat['remote_state'],'unavailable');self.assertFalse(chat['trashed']);self.assertTrue(p.is_file())
   self.assertFalse((self.root/'.viewer-queue/commands'/(row['id']+'.json')).exists());self.assertTrue((self.root/'.viewer-queue/history'/row['run']/(row['id']+'.json')).exists())

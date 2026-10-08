@@ -1,11 +1,11 @@
-# Offline Chat Viewer · v1.1.19
+# Offline Chat Viewer · v1.1.20
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.19-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.19/Offline-Chat-Viewer-v1.1.19-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.19/Offline-Chat-Viewer-v1.1.19-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.20-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.20/Offline-Chat-Viewer-v1.1.20-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.20/Offline-Chat-Viewer-v1.1.20-Windows.zip.sha256.txt)
 
 ## Quick start
 
@@ -14,13 +14,17 @@ A local ChatGPT-style reader for your Markdown and JSON exports. The standard vi
 3. Choose the complete ChatGPT Exporter backup folder, containing `json`, `markdown` and `attachments`. Saved chats and linked files load locally.
 4. Keep the old application folder until the update is working. Shared preferences migrate across versions; retain `.viewer-data` when updating in place.
 
-[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.19) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
+[Release notes](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/tag/v1.1.20) · [Reading](#reading) · [Organization](#organization-and-controls) · [Search](#search-fast-text-now-local-meaning-search-optionally) · [Troubleshooting](#troubleshooting) · [Version history](#version-history)
 
 ## What the viewer does
 
-Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Normal reading and reversible Trash keep your exports intact. The optional reviewed deletion queue can remove a remote ChatGPT conversation and clean up its verified, unshared local Library copies.
+Read ChatGPT Exporter folders, official ChatGPT exports and explicit-role Codex sessions locally. Browse saved branches, models, citations, formulas, tables, code, charts and self-contained HTML widgets. Search messages across chats or find a phrase within a chat. Organize your archive with independent type filters, projects, folders, pins, manual order, aliases, colours, sticky chats and reversible Trash. Normal reading and reversible Trash keep your exports intact. The optional reviewed deletion queue can remove a remote ChatGPT conversation and remove its saved local transcript and verified, unshared attachments.
 
 The standard reader and local backups work offline. An optional semantic search engine downloads once; Google Drive delivery is optional. Windows x64 Python and rendering assets are bundled. Your personal archive, account-specific classification corrections, Google credentials and test fixtures are excluded from the application release.
+
+## Trash and attachment polish · v1.1.20
+
+Trash now has selection, select-all, bulk restore/delete, boxed SVG icons and rounded hover/selection lighting. Queue rows persist between polls, with pulsing status, checkmark transitions, smooth progress and scroll following. Reduced-motion preferences disable animation. Missing images use a labeled warning card; attachment cards show filename, type, size and availability.
 
 ## Sidebar organization · v1.1.19
 
@@ -35,8 +39,8 @@ Native project names lost to blank duplicate exporter handoffs are restored from
 - **Native connection:** select **Connect** in the status bar. The viewer opens its own Windows ChatGPT sign-in window and remembers that private session across updates. No exporter, extension installation, pairing folder or existing browser profile is needed. **Sign in** reopens that same window; **Account** opens it after connection. A green dot and **Connected** require a fresh authenticated response, not just a running window.
 - **Bounded retries:** connection failures retry at most twice after the initial attempt, then stop until you select **Connect**. Sign-in waits for you rather than repeatedly requesting credentials. Server rate-limit waits remain separate and survive reconnects.
 - **One queue owner:** an active matching exporter dashboard can take over through the optional adapter and its existing scheduler. A durable request lease prevents parallel execution; deletion takes priority over discovery/Library work at scheduler boundaries. Shared pacing and Retry-After cooldowns survive reconnects. An uncertain mutation is checked before another deletion can be attempted.
-- **Review and recovery:** queueing never deletes immediately. **Run** requires the exact pending set. Complete Markdown, original JSON and available linked files are backed up before execution. The live conversation graph must match the saved JSON graph before deletion; newer revisions stop for review. An authenticated pre-existing 404 is labeled unavailable, not deleted. Verified deletion updates remote metadata and exporter tombstones separately from original content hashes. Local Library cleanup affects only verified unshared copies, with recovery retained.
-- **Native Codex:** queue local session removal independently of ChatGPT. Execution waits until Codex is closed. A verified private recovery copy remains readable, and stable session-ID exclusions prevent rediscovery across restarts/versions. Codex-owned databases are not edited. Keep the viewer running for deferred jobs to complete.
+- **Review and recovery:** queueing never deletes immediately. **Run** requires the exact pending set. Complete Markdown, original JSON and available linked files are backed up before execution. The live conversation graph must match the saved JSON graph before deletion; newer revisions stop for review. An authenticated pre-existing 404 is labeled unavailable, not deleted. Verified deletion updates remote metadata and exporter tombstones separately from original content hashes. **Delete local copy** removes the transcript, unshared verified attachments, catalog, search indexes and Trash entry after a verified deleted/unavailable result. Changed files stop cleanup with an actionable error; retry uses the stored receipt without repeating remote deletion. Private recovery and shared files remain.
+- **Native Codex:** queue local session removal independently of ChatGPT. Execution waits until Codex is closed. **Preserve local copy** keeps a readable private recovery transcript in Trash. **Delete local copy** removes the chat from the viewer and Trash, retaining only private recovery. Stable session-ID exclusions prevent rediscovery across restarts/versions. Referenced workspace files are not owned session files and remain intact. Codex-owned databases are not edited. Keep the viewer running for deferred jobs to complete.
 - **Organization and controls:** native ChatGPT Projects have their own grouping, distinct from Disk folders and local Categories. Project membership survives type/filter/sort combinations and local reordering. Queue review, running/waiting countdown, pause/stop, checkmarks and user-controlled progress following use the current theme. JavaScript module attachments can open as read-only text.
 
 ### Connect once
@@ -77,7 +81,7 @@ Verification: 255 backend tests (one local Windows symlink skip), five JavaScrip
 
 ## Deletion queue, bookmarks and native Codex · v1.1.13
 
-- Trash rows have independent selection and delete/restore icons. Selection survives filtering; **Queue delete** opens mutually exclusive local retention options. The default cleans up unshared local Library copies after verified remote deletion; **Preserve local copy** keeps local files. Original chat JSON/Markdown and recovery backups are retained in either mode.
+- Trash rows have independent selection and delete/restore icons. Selection survives filtering; **Queue delete** opens mutually exclusive local retention options. The default removes the local transcript and verified unshared attachments after a verified remote deleted/unavailable result, or after native Codex session removal. **Preserve local copy** keeps the readable chat and attachments. Private recovery backups and shared files are retained in either mode. Completed local removals animate out of Trash and remain excluded on refresh/discovery.
 - Adding jobs never executes them. Review the exact pending set, then **Run**. A durable SQLite queue deduplicates by exporter account and conversation ID, snapshots linked Markdown/source/available attachments before remote work, and supports pause/stop, per-chat progress, checkmarks and restrained animation. Manual scrolling disables automatic progress following. Refresh retains jobs; restarting the viewer pauses unfinished work.
 - Remote execution requires the optional, narrowly versioned **ChatGPT Exporter 2.4.12/2.4.13** adapter. In the queue's **Connect exporter bridge**, choose the unpacked extension folder and install. Reload the extension and its ChatGPT tab, open its dashboard and reconnect the same export folder. Installation backs up all four modified exporter files in `viewer-bridge-rollback.zip`; restore those files and remove `viewer-delete-adapter.mjs` to undo it. Other exporter versions are refused without modifications.
 - The adapter enters the exporter's existing exclusive dashboard lock and Engine scheduler. It serializes requests, shares adaptive pacing/Retry-After and account scope, verifies the saved revision again before mutation, and verifies the remote result before acknowledging completion. Disconnected jobs remain queued. Expiring viewer control leases prevent old commands from running after a crash or unavailable folder. Verified deletion tombstones are separate from content hashes and survive exporter resume/index import. No competing HTTP executor runs in the viewer.
@@ -350,6 +354,7 @@ Earlier 1.0.x builds were distributed as portable/development packages. This his
 
 | Version | Recorded changes |
 | --- | --- |
+| **1.1.20** | Actual local transcript/index/Trash removal, distinct native retention modes, local-only cleanup retries, animated Trash/queue UI, and improved attachment/missing-image cards. |
 | **1.1.19** | Combined sidebar, draggable nested organization priorities, saved display options, readable source labels, and recovery of native project names from sparse handoffs. |
 | **1.1.18** | One native Connect button; app-owned Windows ChatGPT sign-in window with persistent private session; no browser extension or pairing setup; native queue ownership fenced from obsolete exporter adapters. |
 | **1.1.17** | Independent browser connection; exclusive exporter handoff; reviewed deletion queue, revision checks and recovery; deferred native Codex deletion with rediscovery exclusions; native ChatGPT Projects grouping. |

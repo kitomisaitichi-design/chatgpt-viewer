@@ -42,7 +42,7 @@ class FileCatalog:
                 if path.is_file():out.append((root,path))
         return sorted(out,key=lambda x:(x[1].name=='library-index.json',str(x[1])))
     def refresh(self):
-        manifests=self.manifests();signature=[]
+        removed=self.archive.removed_ids();manifests=self.manifests();signature=[('removed',tuple(sorted(removed)))]
         for root,path in manifests:
             try:st=path.stat();signature.append((str(path),st.st_mtime_ns,st.st_size))
             except OSError:pass
@@ -85,6 +85,10 @@ class FileCatalog:
                 elif not file_library:sources.add('chat')
                 retained=bool(f.get('historical')) or any(r.get('presence') not in (None,'','present') for r in refs)
                 entries[key]={**previous,'key':key,'id':fid,'name':str(f.get('name') or f.get('filename') or fid),'size':f.get('size'),'mime':f.get('mime') or f.get('mime_type'),'status':f.get('status','unknown'),'error':str(f.get('error') or ''),'relative':relative,'root':root,'target':target,'conversations':conversations,'sha256':f.get('sha256') or (previous.get('sha256') if target==previous.get('target') else None),'manual_url':manual,'source':'library' if file_library else previous.get('source','attachment'),'source_refs':refs,'sources':sorted(sources),'historical':bool(f.get('historical')),'retained':retained,'duplicate_of':f.get('duplicate_of'),'version_info':f.get('version_info') if isinstance(f.get('version_info'),dict) else None}
+        entries={key:item for key,item in entries.items() if not item['conversations'] or set(item['conversations'])-removed}
+        for item in entries.values():
+            item['conversations']=[cid for cid in item['conversations'] if cid not in removed]
+            item['source_refs']=[ref for ref in item['source_refs'] if ref.get('conversationId') not in removed]
         self.entries=entries;self.notes=notes;self.signature=signature
     def available_path(self,item):
         target=item['target']

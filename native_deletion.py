@@ -114,6 +114,8 @@ class NativeDeletionQueue:
                     run TEXT NOT NULL DEFAULT ''
                 )"""
             )
+            if "title" not in {r[1] for r in db.execute("PRAGMA table_info(native_deletion_jobs)")}:
+                db.execute("ALTER TABLE native_deletion_jobs ADD COLUMN title TEXT DEFAULT ''")
             db.commit()
         finally:
             db.close()
@@ -179,38 +181,44 @@ class NativeDeletionQueue:
         excluded = {str(cid) for cid in excluded_value}
         prepared = []
         for session_id in dict.fromkeys(ids):
-            if session_id in excluded:
+            with self.connect() as db:
+                previous=db.execute('SELECT * FROM native_deletion_jobs WHERE session_id=?',(session_id,)).fetchone()
+            if session_id in excluded and not (mode=='library' and previous and previous['state']=='confirmed'):
                 raise ValueError("This native Codex session is already in the local deletion archive")
             chat = catalog.get(session_id)
             if not chat or chat.get("kind") != "codex":
                 raise ValueError("Choose a discovered native Codex session")
             path = Path(chat.get("path", ""))
-            root = self._validate_session(path, session_id)
-            prepared.append((session_id, str(path.resolve()), str(root)))
+            if session_id in excluded:
+                if path.resolve()!=Path(previous['recovery_path']).resolve() or str(session_header(path).get('id'))!=session_id:
+                    raise ValueError('The retained recovery does not match this session')
+                path=Path(previous['source_path']);root=Path(previous['root_path'])
+            else:root = self._validate_session(path, session_id)
+            prepared.append((session_id, str(path.resolve()), str(root),chat.get('alias') or chat['title']))
 
         now = time.time()
         with self.lock, self.connect() as db:
-            for session_id, source, root in prepared:
+            for session_id, source, root, title in prepared:
                 old = db.execute(
                     "SELECT id,state FROM native_deletion_jobs WHERE session_id=?", (session_id,)
                 ).fetchone()
-                if old and old["state"] in ACTIVE_STATES | FINAL_STATES:
+                if old and old["state"]!='cancelled' and old["state"] in ACTIVE_STATES | FINAL_STATES and not (old["state"]=="confirmed" and mode=="library"):
                     continue
                 if old:
                     recovery = self._recovery_path(old["id"])
                     db.execute(
                         """UPDATE native_deletion_jobs SET source_path=?,root_path=?,recovery_path=?,
-                           mode='recovery',state='queued',error='',updated=?,run='' WHERE session_id=?""",
-                        (source, root, str(recovery), now, session_id),
+                           mode=?,title=?,state='queued',error='',updated=?,run='' WHERE session_id=?""",
+                        (source, root, str(recovery), mode, title, now, session_id),
                     )
                 else:
                     job_id = "local-" + uuid.uuid4().hex
                     recovery = self._recovery_path(job_id)
                     db.execute(
                         """INSERT INTO native_deletion_jobs
-                           (id,session_id,source_path,root_path,recovery_path,mode,state,created,updated)
-                           VALUES(?,?,?,?,?,'recovery','queued',?,?)""",
-                        (job_id, session_id, source, root, str(recovery), now, now),
+                           (id,session_id,source_path,root_path,recovery_path,mode,state,created,updated,title)
+                           VALUES(?,?,?,?,?,?,'queued',?,?,?)""",
+                        (job_id, session_id, source, root, str(recovery), mode, now, now, title),
                     )
         return self.status()
 
@@ -569,7 +577,8 @@ class NativeDeletionQueue:
                 if source.exists():
                     raise OSError("The original session is still present after moving to recovery")
 
-        self.archive.organize(session_id, {"trashed": 1})
+        if row['mode']=='library':self.archive.remove_local_chat(session_id)
+        else:self.archive.organize(session_id, {"trashed": 1})
 
     def close(self):
         self.stop_event.set()

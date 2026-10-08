@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.19'
+VERSION = '1.1.20'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -319,6 +319,7 @@ class Archive:
             CREATE TABLE IF NOT EXISTS manifest_entries(cid TEXT,manifest TEXT,metadata TEXT,path TEXT,available INTEGER,PRIMARY KEY(cid,manifest));
             CREATE TABLE IF NOT EXISTS exporter_manifests(path TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS remote_chat_state(root TEXT,cid TEXT,scope TEXT,state TEXT,checked REAL,source TEXT,detail TEXT,PRIMARY KEY(root,cid));
+            CREATE TABLE IF NOT EXISTS local_removals(cid TEXT PRIMARY KEY,removed REAL);
             CREATE TABLE IF NOT EXISTS scanned_files(path TEXT PRIMARY KEY,fingerprint TEXT,status TEXT);
             CREATE TABLE IF NOT EXISTS vectors(cid TEXT,seq INTEGER,part INTEGER,hash TEXT,vector BLOB,PRIMARY KEY(cid,seq,part));
             ''')
@@ -342,6 +343,26 @@ class Archive:
         try:
             with db:yield db
         finally:db.close()
+    def removed_ids(self):
+        with self.connect() as db:return {r[0] for r in db.execute('SELECT cid FROM local_removals')}
+    def remove_local_chat(self,cid):
+        # Tombstone and indexes commit together. Concurrent discovery checks this
+        # same database before writing, including in the separate scan process.
+        with self.lock,self.connect() as db:
+            db.execute('INSERT OR IGNORE INTO local_removals VALUES(?,?)',(cid,time.time()))
+            db.execute('DELETE FROM chunks WHERE cid=?',(cid,))
+            db.execute('DELETE FROM titles WHERE cid=?',(cid,))
+            for table,key in (('messages','cid'),('vectors','cid'),('chunk_rows','cid'),('title_rows','cid'),('manifest_entries','cid'),('organization','cid'),('chats','id')):
+                db.execute('DELETE FROM '+table+' WHERE '+key+'=?',(cid,))
+        self.live_sources.pop(cid,None);self.branch_cache.clear();self.source_link_cache.clear();self.source_reader.clear()
+        self.semantic_state['ready']=False;self.revision+=1
+        if self.ui_cache is not None:
+            with self.ui_cache_lock:
+                self.ui_cache['chats'].pop(cid,None);self.ui_cache['revision']+=1
+                self.ui_cache['coverage']['available']=len(self.ui_cache['chats'])
+        # Shared preferences carry exclusions across portable version folders.
+        removed=sorted(self.removed_ids()|set(self.settings().get('deletedLocalChats',[])))
+        self.save_settings({'deletedLocalChats':removed})
     def enable_ui_cache(self):
         # The HTTP status path must never wait on filesystem/database activity.
         self.ui_cache={'chats':{},'settings':self.settings(),'coverage':dict(expected=0,indexed=0,available=0,missing=0,examples=[]),'revision':0,'loading':True}
@@ -423,12 +444,13 @@ class Archive:
             parsed=parse_md(head,f)
             if parsed and self.live_sources.get(parsed['id'],{}).get('path','').lower().endswith('.json'):return
         else:return
-        if not parsed:return
+        if not parsed or parsed['id'] in self.removed_ids():return
         c={k:v for k,v in parsed.items() if k!='messages'}
         stat=f.stat();c.update(path=str(f),fingerprint=str(stat.st_mtime_ns)+':'+str(stat.st_size),count=0,folder=str(f.parent.relative_to(root)),loaded=False)
         self.live_sources[c['id']]=c
     def publish_sources(self,sources,coverage=None):
         if self.ui_cache is None:return
+        removed=self.removed_ids();sources=[c for c in sources if c['id'] not in removed]
         with self.ui_cache_lock:new_ids={c['id'] for c in sources if c['id'] not in self.ui_cache['chats']}
         organization={}
         if new_ids:
@@ -547,6 +569,7 @@ class Archive:
             revision=self.revision
             result=dict(chats=self.catalog() if since is None or str(revision)!=str(since) else None,
                         revision=revision,coverage=self.coverage(),settings=self.settings(),scan=dict(self.status),semantic=dict(self.semantic_state))
+        result['removed']=sorted(self.removed_ids())
         if limit is not None and result['chats'] is not None:
             try:previous=int(since) if since is not None else -1
             except (ValueError,TypeError):previous=-1
@@ -623,6 +646,12 @@ class Archive:
     def settings(self):
         with self.connect() as db:return {r['key']:json.loads(r['value']) for r in db.execute('SELECT * FROM settings')}
     def save_settings(self,values):
+        if 'deletedLocalChats' in values:
+            with self.lock,self.connect() as db:
+                db.executemany('INSERT OR IGNORE INTO local_removals VALUES(?,?)',[(str(cid),time.time()) for cid in values['deletedLocalChats']])
+                for cid in values['deletedLocalChats']:
+                    for table,key in (('chunks','cid'),('titles','cid'),('messages','cid'),('vectors','cid'),('chunk_rows','cid'),('title_rows','cid'),('manifest_entries','cid'),('organization','cid'),('chats','id')):
+                        db.execute('DELETE FROM '+table+' WHERE '+key+'=?',(cid,))
         if self.ui_cache is not None:
             with self.ui_cache_lock:self.ui_cache['settings'].update(values)
         with self.lock,self.connect() as db:
@@ -641,7 +670,8 @@ class Archive:
                     category='',pinned=0,position=0,alias='',trashed=0,color='',sticky=0,bookmarked=0,kind_override='',loaded=False))
                 ready[-1].update({k:organization.get(r['cid'],{}).get(k,ready[-1][k]) for k in ORGANIZATION_FIELDS})
             from remote_state import enrich
-            return enrich(self,ready)
+            removed={r[0] for r in db.execute('SELECT cid FROM local_removals')}
+            return enrich(self,[c for c in ready if c['id'] not in removed])
     def coverage(self):
         with self.connect() as db:
             expected={r[0] for r in db.execute('SELECT DISTINCT cid FROM manifest_entries')}
@@ -657,6 +687,7 @@ class Archive:
         entry=normalize_entry(entry)
         if not entry:return
         cid=entry['id'];path='';available=False
+        if cid in self.removed_ids():return
         for key in ('json','markdown'):
             value=entry.get(key)
             if isinstance(value,str) and value:
@@ -666,6 +697,7 @@ class Archive:
         if signal:entry={**entry,'chat_kind':signal[0],'kind_evidence':signal[1]}
         metadata=json.dumps(entry,ensure_ascii=False)
         with self.lock,self.connect() as db:
+            if db.execute('SELECT 1 FROM local_removals WHERE cid=?',(cid,)).fetchone():return
             old=db.execute('SELECT metadata,path,available FROM manifest_entries WHERE cid=? AND manifest=?',(cid,str(manifest))).fetchone()
             if old and tuple(old)==(metadata,path,int(available)):return
             db.execute('INSERT OR REPLACE INTO manifest_entries VALUES(?,?,?,?,?)',(cid,str(manifest),metadata,path,int(available)))
@@ -863,11 +895,13 @@ class Archive:
             if meta.get('url'):c['url']=meta['url']
     def store(self,item,path,fp,root,meta):
         cid=item['id'];msgs=item['messages'];project=item.get('project')
+        if cid in self.removed_ids():return
         self.semantic_state['ready']=False
         if not isinstance(project,str):project=str(project or '')
         created=item['created'] or min((m['time'] for m in msgs if m['time']),default=path.stat().st_mtime)
         updated=item['updated'] or max((m['time'] for m in msgs if m['time']),default=created)
         with self.lock,self.connect() as db:
+            if db.execute('SELECT 1 FROM local_removals WHERE cid=?',(cid,)).fetchone():return
             if not db.execute("SELECT 1 FROM settings WHERE key='ftsRowMapV1'").fetchone():
                 db.execute('INSERT OR IGNORE INTO chunk_rows SELECT cid,rowid FROM chunks')
                 db.execute('INSERT OR REPLACE INTO title_rows SELECT cid,rowid FROM titles')
@@ -1228,8 +1262,8 @@ class Server(ThreadingHTTPServer):
     def deletion_status(self):
         value=self.deletions.status();catalog=dict(self.archive.ui_cache['chats']) if self.archive.ui_cache else {c['id']:c for c in self.archive.catalog()}
         for row in self.native.deletion_queue.rows():
-            value['jobs'].append(dict(row,cid=row['session_id'],local=True,title=catalog.get(row['session_id'],{}).get('alias') or catalog.get(row['session_id'],{}).get('title') or row['session_id'],message='Waiting until Codex is closed' if row['state']=='waiting' else '',remote_state='local-removed' if row['state']=='confirmed' else ''))
-        value['jobs'].sort(key=lambda r:(r['created'],r['id']));value['native_connection']=self.native_connection.status();return value
+            value['jobs'].append(dict(row,cid=row['session_id'],local=True,title=row.get('title') or catalog.get(row['session_id'],{}).get('alias') or catalog.get(row['session_id'],{}).get('title') or row['session_id'],message='Waiting until Codex is closed' if row['state']=='waiting' else '',remote_state='local-removed' if row['state']=='confirmed' else ''))
+        value['removed']=sorted(self.archive.removed_ids());value['jobs'].sort(key=lambda r:(r['created'],r['id']));value['native_connection']=self.native_connection.status();return value
     def queue_add(self,ids,mode):
         if not isinstance(ids,list) or not 0<len(ids)<=1000:raise ValueError('Select between 1 and 1000 chats')
         with self.queue_lock:
@@ -1237,7 +1271,7 @@ class Server(ThreadingHTTPServer):
             if any(cid not in catalog for cid in ids):raise ValueError('A selected conversation was not found')
             local=[cid for cid in ids if Path(catalog[cid]['path']).suffix.lower()=='.jsonl'];remote=[cid for cid in ids if cid not in local]
             if remote:self.deletions.enqueue(remote,mode)
-            if local:self.native.deletion_queue.enqueue(local,'recovery')
+            if local:self.native.deletion_queue.enqueue(local,mode)
             return self.deletion_status()
     def queue_action(self,action,ids):
         with self.queue_lock:

@@ -197,11 +197,31 @@ class NativeDeletionTests(unittest.TestCase):
                 "SELECT 1 FROM manifest_entries WHERE cid=?", (self.session_id,)
             ).fetchone())
 
-    def test_library_and_preserve_modes_map_to_local_recovery(self):
+    def test_library_and_preserve_modes_are_distinct(self):
         queue = self.queue()
-        self.assertEqual(queue.enqueue([self.session_id], mode="library")["jobs"][0]["mode"], "recovery")
+        self.assertEqual(queue.enqueue([self.session_id], mode="library")["jobs"][0]["mode"], "library")
         queue.action("remove", [queue.rows()[0]["id"]])
-        self.assertEqual(queue.enqueue([self.session_id], mode="preserve")["jobs"][0]["mode"], "recovery")
+        self.assertEqual(queue.enqueue([self.session_id], mode="preserve")["jobs"][0]["mode"], "preserve")
+
+    def test_delete_local_mode_removes_catalog_indexes_and_prevents_rediscovery(self):
+        queue=self.queue();queue.enqueue([self.session_id],mode='library');job=queue.rows()[0]
+        with patch.object(queue,'start'):queue.action('run',[job['id']])
+        queue.tick();self.assertEqual(queue.rows()[0]['state'],'confirmed')
+        self.assertFalse(self.source.exists());self.assertTrue(Path(job['recovery_path']).is_file())
+        self.assertEqual(self.archive.catalog(),[]);self.assertNotIn(self.session_id,self.archive.ui_cache['chats'])
+        self.assertIn(self.session_id,self.archive.state()['removed'])
+        self.source.write_bytes(self.original_bytes)
+        with patch('native_codex.homes',return_value=[self.home]):self.codex.discover()
+        self.assertEqual(self.archive.catalog(),[])
+        self.assertTrue(self.attachment.exists(),'Referenced workspace files are not owned session files')
+
+    def test_remove_previously_preserved_native_copy(self):
+        queue=self.queue();queue.enqueue([self.session_id],mode='preserve');job=queue.rows()[0]
+        with patch.object(queue,'start'):queue.action('run',[job['id']])
+        queue.tick();self.assertTrue(self.archive.catalog())
+        queue.enqueue([self.session_id],mode='library')
+        with patch.object(queue,'start'):queue.action('run',[job['id']])
+        queue.tick();self.assertEqual(queue.rows()[0]['state'],'confirmed');self.assertEqual(self.archive.catalog(),[])
 
     def test_default_codex_home_is_a_validated_session_root(self):
         fallback = self.base / "default-codex"

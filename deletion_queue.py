@@ -104,10 +104,12 @@ class DeletionQueue:
                 root,scope=self.chat_account(cid);prepared.append((cid,c,root,scope))
         with self.lock,self.archive.connect() as db:
             for cid,c,root,scope in prepared:
-                old=db.execute('SELECT state,mode FROM deletion_jobs WHERE scope=? AND cid=?',(scope,cid)).fetchone()
+                old=db.execute('SELECT state,mode,receipt FROM deletion_jobs WHERE scope=? AND cid=?',(scope,cid)).fetchone()
                 if old and old['state']!='cancelled':
                     if old['mode']!=mode:
-                        if old['state'] not in ('queued','failed'):raise ValueError('Retention cannot change while this job is active or already complete')
+                        if old['state']=='confirmed' and mode=='library':
+                            db.execute("UPDATE deletion_jobs SET state='failed' WHERE scope=? AND cid=?",(scope,cid))
+                        elif old['state'] not in ('queued','failed'):raise ValueError('Retention cannot change while this job is active or already complete')
                         db.execute("UPDATE deletion_jobs SET mode=? WHERE scope=? AND cid=?",(mode,scope,cid))
                     continue
                 db.execute('INSERT OR REPLACE INTO deletion_jobs VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(uuid.uuid4().hex,cid,scope,str(root),c['alias'] or c['title'],mode,'queued','',time.time(),time.time(),'',''))
@@ -129,7 +131,7 @@ class DeletionQueue:
                 if set(ids or [])!={r['id'] for r in rows}:raise ValueError('The queue changed. Review all pending chats before running')
                 # Backups happen asynchronously before a command becomes executable.
                 run=uuid.uuid4().hex
-                unbound=[r for r in rows if r['scope']=='unbound']
+                unbound=[r for r in rows if r['scope']=='unbound' and not json.loads(r['receipt'] or '{}').get('verified')]
                 if unbound:
                     scopes=self.browser.connected_scopes()
                     if len(scopes)!=1:raise ValueError('Connect the browser companion to the account that owns these chats before running')
@@ -137,6 +139,7 @@ class DeletionQueue:
                         db.execute("UPDATE deletion_jobs SET scope=? WHERE scope='unbound'",(next(iter(scopes)),))
                 with self.archive.connect() as db:
                     for row in rows:
+                        if json.loads(row['receipt'] or '{}').get('verified'):continue
                         db.execute("UPDATE browser_requests SET phase='preflight',attempts=0 WHERE job=? AND phase='done'",(row['id'],))
                 with self.archive.connect() as db:db.execute("UPDATE deletion_jobs SET state='preparing',run=?,error='' WHERE state NOT IN ('confirmed','cancelled')",(run,))
                 self.control(False,run)
@@ -167,6 +170,28 @@ class DeletionQueue:
         if source:
             path=Path(source['path']);before=path.stat();shutil.copy2(path,base/('source'+path.suffix))
             if (before.st_size,before.st_mtime_ns)!=(path.stat().st_size,path.stat().st_mtime_ns):raise ValueError('Chat changed during backup; retry after the current export finishes')
+        sources=[];paths={}
+        with self.archive.connect() as db:
+            for item in db.execute('SELECT manifest,metadata,path FROM manifest_entries WHERE cid=?',(row['cid'],)):
+                root=Path(item['manifest']).parent.resolve();metadata=json.loads(item['metadata'])
+                for key in ('json','markdown'):
+                    value=metadata.get(key)
+                    if isinstance(value,str) and value:
+                        target=(root/value).resolve()
+                        if target.is_relative_to(root):paths[target]=root
+            if source:paths.setdefault(Path(source['path']).resolve(),Path(row['root']).resolve())
+            shared={r[0] for r in db.execute('SELECT path FROM chats WHERE id!=? UNION SELECT path FROM manifest_entries WHERE cid!=?',(row['cid'],row['cid']))}
+        for path,root in paths.items():
+            if not path.is_file() or path.is_symlink():continue
+            if not path.is_relative_to(root):raise ValueError('Conversation source escaped its export root')
+            # A monolithic export or another chat's source remains shared.
+            from itertools import islice
+            items=list(islice(self.archive.read_items(path),2))
+            exclusive=str(path) not in shared and len(items)==1 and items[0]['id']==row['cid']
+            target=base/'sources'/(hashlib.sha256(str(path).encode()).hexdigest()[:16]+'-'+path.name);target.parent.mkdir(exist_ok=True)
+            before=path.stat();shutil.copy2(path,target);sha=digest(target)
+            if digest(path)!=sha or (before.st_size,before.st_mtime_ns)!=(path.stat().st_size,path.stat().st_mtime_ns):raise ValueError('Conversation changed during backup')
+            sources.append(dict(path=str(path),copy=str(target),sha256=sha,root=str(root),exclusive=exclusive))
         self.files.refresh();saved=[]
         with self.files.lock:items=[dict(f) for f in self.files.entries.values() if row['cid'] in f['conversations'] and not f['historical']]
         for f in items:
@@ -176,13 +201,18 @@ class DeletionQueue:
             before=path.stat();shutil.copy2(path,target);sha=digest(target)
             if digest(path)!=sha or (before.st_size,before.st_mtime_ns)!=(path.stat().st_size,path.stat().st_mtime_ns):raise ValueError('Attachment changed while backing up; no deletion command sent')
             saved.append(dict(path=str(path),copy=str(target),sha256=sha,conversations=f['conversations'],root=str(f['root']),size=before.st_size))
-        write(base/'index.json',dict(schema=SCHEMA,cid=row['cid'],scope=row['scope'],markdown_origin=origin,files=saved))
+        write(base/'index.json',dict(schema=SCHEMA,cid=row['cid'],scope=row['scope'],markdown_origin=origin,files=saved,sources=sources))
     def tick(self):
         self.collect_checks()
         rows=self.rows();prepared=[]
         for row in rows:
             if row['state']!='preparing':continue
             try:
+                previous=json.loads(row['receipt'] or '{}')
+                if previous.get('verified') is True and previous.get('state')=='confirmed':
+                    if row['mode']=='library':self.cleanup(row)
+                    with self.archive.connect() as db:db.execute("UPDATE deletion_jobs SET state='confirmed',error='' WHERE id=?",(row['id'],))
+                    continue
                 self.snapshot(row)
                 command={k:row[k] for k in ('id','cid','scope','mode','run','title')};command.update(schema=SCHEMA,created=row['created'])
                 with self.archive.connect() as db:
@@ -216,10 +246,14 @@ class DeletionQueue:
                 remote=receipt.get('remote_state','deleted')
                 if remote not in ('deleted','unavailable'):continue
                 record(self.archive,row['root'],row['cid'],row['scope'],remote,'deletion receipt',checked=receipt.get('updated') or time.time())
-                if remote=='deleted':self.archive.organize(row['cid'],{'trashed':1})
-                if row['mode']=='library' and remote=='deleted':
+                # Persist proof before local work. A retry consumes this receipt,
+                # never issues the destructive remote request a second time.
+                with self.archive.connect() as db:db.execute('UPDATE deletion_jobs SET receipt=? WHERE id=?',(json.dumps(receipt),row['id']))
+                if row['mode']=='library':
                     try:self.cleanup(row)
-                    except Exception as error:receipt['error']='Remote deletion confirmed; local cleanup needs attention: '+str(error)
+                    except Exception as error:
+                        state='failed';receipt['error']='Remote result verified; retry local cleanup: '+str(error)
+                elif remote=='deleted':self.archive.organize(row['cid'],{'trashed':1})
             elif row['state']=='paused' and state in ('running','retrying'):continue
             with self.archive.connect() as db:db.execute('UPDATE deletion_jobs SET state=?,updated=?,error=?,receipt=? WHERE id=?',(state,time.time(),receipt.get('error',''),json.dumps(receipt),row['id']))
         # Completed metadata must not exhaust the browser's bounded active inbox.
@@ -229,22 +263,44 @@ class DeletionQueue:
             if source.exists():
                 target=Path(row['root'])/'.viewer-queue/history'/row['run']/(row['id']+'.json');target.parent.mkdir(parents=True,exist_ok=True);os.replace(source,target)
     def cleanup(self,row):
-        # Only verified, unshared local Library copies are removed. Recovery copies stay available.
-        index=read(self.archive.data_dir/'deletion-recovery'/row['id']/'index.json')
+        base=self.archive.data_dir/'deletion-recovery'/row['id'];index=read(base/'index.json')
+        if index.get('cid')!=row['cid'] or index.get('scope')!=row['scope']:raise ValueError('The recovery manifest does not match this chat/account')
+        sources=index.get('sources')
+        if sources is None:
+            # Upgrade old receipts without inventing a backup or overwriting it.
+            with self.archive.connect() as db:old=db.execute('SELECT path FROM chats WHERE id=?',(row['cid'],)).fetchone()
+            sources=[]
+            if old:
+                path=Path(old['path']);copy=base/('source'+path.suffix)
+                if not copy.is_file():raise ValueError('Original transcript backup is missing')
+                from itertools import islice
+                items=list(islice(self.archive.read_items(copy),2))
+                if len(items)!=1 or items[0]['id']!=row['cid']:raise ValueError('An older backup cannot prove exclusive transcript ownership')
+                with self.archive.connect() as db:shared=db.execute('SELECT 1 FROM chats WHERE id!=? AND path=? UNION SELECT 1 FROM manifest_entries WHERE cid!=? AND path=?',(row['cid'],str(path),row['cid'],str(path))).fetchone()
+                sources=[dict(path=str(path),copy=str(copy),sha256=digest(copy),root=row['root'],exclusive=not shared)]
         self.files.refresh()
         with self.files.lock:current=[dict(f) for f in self.files.entries.values()]
+        candidates=[f for f in sources if f.get('exclusive')]
         for f in index.get('files',[]):
+            path=Path(f['path']);uses={cid for item in current if item['target']==path for cid in item['conversations']}
+            if not uses-{row['cid']}:candidates.append(f)
+        # Validate everything before moving anything; shared files stay untouched.
+        for f in candidates:
             path=Path(f['path']);copy=Path(f['copy'])
-            uses={cid for item in current if item['target']==path for cid in item['conversations']}
-            if uses-{row['cid']} or 'library' not in {s for item in current if item['target']==path for s in item['sources']}:continue
-            if path.is_file() and path.resolve().is_relative_to(Path(f['root']).resolve()) and digest(path)==f['sha256'] and digest(copy)==f['sha256']:
-                # Rename on the same volume instead of unlinking a file that an exporter may replace.
-                recovery=Path(f['root'])/'.viewer-queue/recovery'/row['id'];recovery.mkdir(parents=True,exist_ok=True)
-                moved=recovery/(hashlib.sha256(str(path).encode()).hexdigest()[:16]+'-'+path.name)
-                os.replace(path,moved)
-                if digest(moved)!=f['sha256']:
-                    if not path.exists():os.replace(moved,path)
-                    raise ValueError('A Library file changed during cleanup; its bytes were retained for recovery')
+            if path.is_symlink() or not path.resolve().is_relative_to(Path(f['root']).resolve()):raise ValueError('A local file escaped its verified root')
+            if not copy.is_file() or digest(copy)!=f['sha256']:raise ValueError('A recovery copy failed verification')
+            if path.is_file() and digest(path)!=f['sha256']:raise ValueError('A local file changed since backup; it was left in place')
+        for f in candidates:
+            path=Path(f['path'])
+            if not path.is_file():continue
+            recovery=Path(f['root'])/'.viewer-queue/recovery'/row['id'];recovery.mkdir(parents=True,exist_ok=True)
+            moved=recovery/(hashlib.sha256(str(path).encode()).hexdigest()[:16]+'-'+path.name)
+            os.replace(path,moved)
+            if digest(moved)!=f['sha256']:
+                if not path.exists():os.replace(moved,path)
+                raise ValueError('A local file changed during cleanup; its bytes were retained')
+        self.archive.remove_local_chat(row['cid'])
+        self.files.refresh()
     def status(self):
         rows=self.rows();bridges=[]
         for root,scope in self.roots().items():
