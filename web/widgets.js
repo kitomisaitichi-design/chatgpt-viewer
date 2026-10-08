@@ -6,7 +6,7 @@ window.SavedWidgets=(()=>{
  const colors=['#5297ee','#59b56b','#ee8b43','#bd84ea','#ed6e8a','#48babe'],frames=new Map();
  window.addEventListener('message',event=>{const frame=frames.get(event.data?.viewerFrame);if(!frame)return;if(!frame.isConnected){frames.delete(event.data.viewerFrame);return;}if(event.source!==frame.contentWindow)return;const height=Number(event.data.height);if(Number.isFinite(height))frame.style.height=Math.max(320,Math.min(5000,height+36))+'px';});
  const svgNode=(tag,attrs,text)=>{const e=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [key,value] of Object.entries(attrs||{}))e.setAttribute(key,String(value));if(text!==undefined)e.textContent=String(text);return e;};
- function extract(text){const widgets=[];text=text.replace(/\ue200(genui|image_group)\ue202([\s\S]*?)\ue201/g,(raw,type,json,offset)=>{
+ function extract(text){text=window.RichMedia.blocks(text);const widgets=[];text=text.replace(/\ue200(genui|image_group)\ue202([\s\S]*?)\ue201/g,(raw,type,json,offset)=>{
   // Literal examples inside fenced code remain literal examples.
   let fence='';for(const line of text.slice(0,offset).split('\n')){const m=line.match(/^\s*(`{3,}|~{3,})/);if(m){if(!fence)fence=m[1][0];else if(fence===m[1][0])fence='';}}if(fence)return raw;
   try{const spec=JSON.parse(json),w=type==='image_group'?{image_group:spec}:spec;if(w.citation)return raw;return 'OFFLINEWIDGETPLACEHOLDER'+(widgets.push(w)-1)+'END';}
@@ -14,7 +14,7 @@ window.SavedWidgets=(()=>{
  });
  // A long message may arrive in fragments. Do not show half a JSON document.
  const partial=text.indexOf('\ue200genui\ue202');if(partial>=0&&!text.includes('\ue201',partial)){text=text.slice(0,partial)+'OFFLINEWIDGETPLACEHOLDER'+(widgets.push({unavailable:{title:'Loading saved widget…'}})-1)+'END';}
- return {text,widgets};}
+ return window.RichMedia.combine(text,widgets);}
  function source(card,value,language='json',label='Saved source'){
   const fold=n('details','widget-source'),summary=n('summary','',label),pre=n('pre'),code=n('code');code.className='language-'+language;code.dataset.language=language;code.textContent=typeof value==='string'?value:JSON.stringify(value,null,2);pre.append(code);fold.append(summary,pre);card.append(fold);return fold;
  }

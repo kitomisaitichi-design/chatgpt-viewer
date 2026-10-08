@@ -1,11 +1,11 @@
-# Offline Chat Viewer · v1.1.26
+# Offline Chat Viewer · v1.1.27
 
 A local ChatGPT-style reader for your Markdown and JSON exports. The standard viewer has no package-install step, cloud service, subscription, or CDN dependency. Windows x64 Python is included in the download.
 
 ## Latest Windows release
 
-- **Download:** [Offline-Chat-Viewer-v1.1.26-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.26/Offline-Chat-Viewer-v1.1.26-Windows.zip)
-- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.26/Offline-Chat-Viewer-v1.1.26-Windows.zip.sha256.txt)
+- **Download:** [Offline-Chat-Viewer-v1.1.27-Windows.zip](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.27/Offline-Chat-Viewer-v1.1.27-Windows.zip)
+- **SHA-256:** [Release checksum](https://github.com/kitomisaitichi-design/chatgpt-viewer/releases/download/v1.1.27/Offline-Chat-Viewer-v1.1.27-Windows.zip.sha256.txt)
 
 ## Quick start
 
@@ -403,3 +403,5 @@ Deletion progress now scrolls automatically to each advancing job, without a Fol
 Completed deletion rows briefly show a checkmark, then collapse out of the queue. Existing completed receipts stay out of the pending list; the queue button hides when nothing remains pending. Verification receipts remain stored for safe retries.
 
 When an original sandbox link has no exporter association, the preview lists exact-name downloaded copies from the indexed Library, with size and source folder. Choose **Use this local copy**; matching names can be different revisions. The explicit choice persists across versions and is labeled Selected local copy. Changed files require another review. Opening these candidates uses the existing file catalog without archive rescans.
+
+Version 1.1.27 restores new Entity/Cite table markup and combines consecutive new image-group sections into one adaptive collection. Missing media uses the same card layout; legacy Markdown images remain unchanged.
