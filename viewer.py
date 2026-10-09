@@ -301,7 +301,7 @@ class Archive:
         self.mp=multiprocessing.get_context('spawn');self.foreground=self.mp.Event();self.foreground_count=0;self.foreground_lock=threading.Lock()
         self.status=dict(scanning=False,phase='Ready',files=0,indexed=0,errors=[],roots=[])
         self.ui_cache=None;self.ui_cache_lock=threading.Lock();self.live_sources={};self.cache_stop=threading.Event();self.cache_thread=None
-        self.semantic_lock=threading.Lock(); self.semantic_model=None; self.semantic_state={'ready':False,'building':False,'count':0,'error':''}
+        self.semantic_lock=threading.Lock(); self.semantic_model=None; self.semantic_ready_epoch=None; self.semantic_state={'ready':False,'building':False,'count':0,'error':''}
         if not initialize:return
         with self.connect() as db:
             db.execute('PRAGMA journal_mode=WAL')
@@ -349,6 +349,7 @@ class Archive:
         # Tombstone and indexes commit together. Concurrent discovery checks this
         # same database before writing, including in the separate scan process.
         with self.lock,self.connect() as db:
+            db.execute("INSERT INTO settings(key,value) VALUES('ftsEpochV1','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1")
             db.execute('INSERT OR IGNORE INTO local_removals VALUES(?,?)',(cid,time.time()))
             db.execute('DELETE FROM chunks WHERE cid=?',(cid,))
             db.execute('DELETE FROM titles WHERE cid=?',(cid,))
@@ -517,7 +518,7 @@ class Archive:
             self.source_link_cache={key:links}
         links=self.source_link_cache[key]
         return {ref:exact.get(ref) or links[ref] for ref in requested[:100] if ref in exact or ref in links and len(links[ref])==1}
-    def message_fragment(self,cid,seq,offset=0,leaf=None,budget=24576):
+    def message_fragment(self,cid,seq,offset=0,leaf=None,budget=24576,expected_hash=None):
         seq=int(seq);offset=max(0,int(offset))
         budget=max(4096,min(int(budget),131072))
         if leaf:
@@ -538,7 +539,10 @@ class Archive:
                 if row is None:
                     page=self.foreground_page(cid,None,seq,1,True);row=next((m for m in page['messages'] if m['seq']==seq),None)
         if not row:raise ValueError('Saved message not found.')
-        text=row['text'];part=bounded_text(text[offset:offset+budget],budget);end=offset+len(part)
+        text=row['text']
+        if expected_hash and not secrets.compare_digest(hashlib.sha256(text.encode('utf-8')).hexdigest(),expected_hash):
+            raise ValueError('This saved conversation changed while loading a long message. Reopen it to load the current version.')
+        part=bounded_text(text[offset:offset+budget],budget);end=offset+len(part)
         return dict(text=part,next_offset=end,complete=end>=len(text),length=len(text))
     def catalog_batch(self,offset=0,limit=25,priority=''):
         offset=max(0,int(offset));limit=max(1,min(int(limit),25))
@@ -902,6 +906,7 @@ class Archive:
         updated=item['updated'] or max((m['time'] for m in msgs if m['time']),default=created)
         with self.lock,self.connect() as db:
             if db.execute('SELECT 1 FROM local_removals WHERE cid=?',(cid,)).fetchone():return
+            db.execute("INSERT INTO settings(key,value) VALUES('ftsEpochV1','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1")
             if not db.execute("SELECT 1 FROM settings WHERE key='ftsRowMapV1'").fetchone():
                 db.execute('INSERT OR IGNORE INTO chunk_rows SELECT cid,rowid FROM chunks')
                 db.execute('INSERT OR REPLACE INTO title_rows SELECT cid,rowid FROM titles')
@@ -926,6 +931,9 @@ class Archive:
     def page(self,cid,before=None,around=None,limit=100,details=False,after=None):
         limit=max(1,min(int(limit),200));predicate='' if details else ' AND visible=1'
         with self.connect() as db:
+            # A plain sqlite3 context manager does not begin a read snapshot.
+            # These four SELECTs must agree if a scanner commits mid-page.
+            db.execute('BEGIN')
             known=db.execute('SELECT id FROM chats WHERE id=?',(cid,)).fetchone()
             if not known:
                 source=db.execute('SELECT path FROM manifest_entries WHERE cid=? AND available=1',(cid,)).fetchone()
@@ -1005,6 +1013,11 @@ class Archive:
             if key not in used:used.add(key);clean.append(r)
         used_mode='keyword' if mode=='keyword' else 'smart (text + related words)'
         if mode in ('semantic','hybrid'):
+            if self.semantic_state['ready']:
+                with self.connect() as db:
+                    row=db.execute("SELECT value FROM settings WHERE key='ftsEpochV1'").fetchone()
+                if (int(row[0]) if row else 0)!=self.semantic_ready_epoch:
+                    self.semantic_state['ready']=False
             if not self.semantic_state['ready']:
                 self.request_semantic()
                 return {'results':clean[:60],'mode':used_mode,'notice':self.semantic_state.get('phase') or 'Semantic setup/indexing started in the background. Progress is shown in Settings; text results remain available.'}
@@ -1027,6 +1040,8 @@ class Archive:
             threading.Thread(target=self.build_semantic,daemon=True).start()
     def build_semantic(self,allow_setup=True):
         if not self.semantic_lock.acquire(False):return
+        self.semantic_ready_epoch=None
+        self.semantic_state['ready']=False
         self.semantic_state.update(building=True,error='',count=0,phase='Preparing local semantic search…')
         try:
             modelpath=APP/'models'/'semantic'
@@ -1046,7 +1061,11 @@ class Archive:
             from sentence_transformers import SentenceTransformer
             self.semantic_state['phase']='Loading the local meaning model…'
             self.semantic_model=SentenceTransformer(str(modelpath),local_files_only=True,device='cpu')
-            with self.connect() as db: rows=list(db.execute('SELECT cid,seq,title,text FROM chunks'))
+            with self.connect() as db:
+                db.execute('BEGIN')
+                rows=list(db.execute('SELECT cid,seq,title,text FROM chunks'))
+                epoch_row=db.execute("SELECT value FROM settings WHERE key='ftsEpochV1'").fetchone()
+                snapshot_epoch=int(epoch_row[0]) if epoch_row else 0
             self.semantic_state['phase']='Indexing saved messages'
             counts={};batch=[]
             with self.lock,self.connect() as db:db.execute('DELETE FROM vectors')
@@ -1056,7 +1075,17 @@ class Archive:
                 if len(batch)>=32:
                     self._embed_batch(batch,np);batch=[]
             if batch:self._embed_batch(batch,np)
-            self.semantic_state.update(ready=True,count=len(rows),phase='')
+            stale_build=False
+            with self.lock,self.connect() as db:
+                epoch_row=db.execute("SELECT value FROM settings WHERE key='ftsEpochV1'").fetchone()
+                current_epoch=int(epoch_row[0]) if epoch_row else 0
+                if current_epoch!=snapshot_epoch:
+                    db.execute('DELETE FROM vectors')
+                    stale_build=True
+                else:
+                    self.semantic_ready_epoch=snapshot_epoch
+                    self.semantic_state.update(ready=True,count=len(rows),phase='')
+            if stale_build:raise RuntimeError('The archive changed during semantic indexing. Search again to rebuild the current version.')
         except Exception as e:self.semantic_state.update(ready=False,error=str(e),phase='')
         finally:self.semantic_state['building']=False;self.semantic_lock.release()
     def _embed_batch(self,batch,np):
@@ -1182,7 +1211,8 @@ def bounded_message_page(page,budget=32768,around=None,forward=False):
     for m in page['messages']:
         part=bounded_text(m['text'],min(16384,budget//2))
         if len(part)<len(m['text']):
-            m=dict(m,text=part,text_complete=False,text_next=len(part),text_length=len(m['text']))
+            m=dict(m,text=part,text_complete=False,text_next=len(part),text_length=len(m['text']),
+                   text_hash=hashlib.sha256(m['text'].encode('utf-8')).hexdigest())
         # Large web-search metadata must not defeat the message byte budget.
         # Resolve omitted references on demand for this exact message.
         extras=m.get('extras') or {}
@@ -1239,7 +1269,7 @@ class Server(ThreadingHTTPServer):
     def __init__(self,address,archive):
         super().__init__(address,Handler);self.archive=archive;self.token=secrets.token_urlsafe(32)
         self.cookie_name='viewer_token_'+str(self.server_port)
-        self.transfer_lock=threading.Lock();self.transfers={};self.recent_transfers=[];self.renderer_cache={}
+        self.transfer_lock=threading.Lock();self.transfers={};self.recent_transfers=[];self.renderer_cache={};self.settings_write_lock=threading.RLock()
         from archive_backup import BackupManager
         self.backup=BackupManager(archive,APP)
         from library_files import FileCatalog
@@ -1428,7 +1458,9 @@ class Handler(BaseHTTPRequestHandler):
                 if b'\x00' in part:raise ValueError('This file contains binary data. Download it to open it.')
                 self.send(dict(text=part[:32768].decode('utf-8-sig',errors='replace'),truncated=len(part)>32768,name=f.name));return
             if url.path=='/api/message-text':
-                with a.foreground_read():self.send(a.message_fragment(q['id'],q['seq'],q.get('offset',0),q.get('leaf'),q.get('bytes',24576)))
+                if int(q.get('offset',0))>0 and not q.get('hash'):
+                    raise ValueError('Message version token missing. Reopen the conversation to load the current text.')
+                with a.foreground_read():self.send(a.message_fragment(q['id'],q['seq'],q.get('offset',0),q.get('leaf'),q.get('bytes',24576),q.get('hash')))
                 return
             if url.path=='/api/renderer':
                 names={'marked':'vendor/marked.js','katex':'vendor/katex/katex.min.js','highlight':'vendor/highlight.js'};name=q.get('name')
@@ -1472,6 +1504,9 @@ class Handler(BaseHTTPRequestHandler):
                 d,path=a.source_data(q['id']);mp,children,_=graph_context(d)
                 leaves=[dict(id=k,time=epoch((v.get('message') or {}).get('create_time')),preview=content_text((v.get('message') or {}).get('content',{}))[:160],selected=k==d.get('current_node')) for k,v in mp.items() if not children[k]]
                 self.send({'branches':leaves});return
+            if url.path=='/api/linked-source':
+                from linked_sources import parsed_file_links
+                self.send({'matches':parsed_file_links(a,q.get('name',''))});return
             if url.path=='/api/source':
                 if a.ui_cache is not None and q['id'] in a.ui_cache['chats']:r={'path':a.ui_cache['chats'][q['id']]['path']}
                 else:
@@ -1549,7 +1584,11 @@ class Handler(BaseHTTPRequestHandler):
                 if 'releaseCheckHours' in d:
                     from release_checks import interval
                     if type(d['releaseCheckHours']) is not int or d['releaseCheckHours'] not in (0,12,24,168):raise ValueError('Choose 12h, 24h, weekly or off')
-                a.save_settings(d);self.server.releases.reschedule()
+                # Concurrent HTTP handlers must commit settings requests in
+                # arrival order, rather than whichever completes last.
+                with self.server.settings_write_lock:
+                    a.save_settings(d)
+                    self.server.releases.reschedule()
             elif self.path=='/api/remote-status/check':self.send(self.server.deletions.check_remote(d.get('id')));return
             elif self.path=='/api/connection/open-folder':
                 folder=Path(self.server.deletions.browser.setup()['folder'])

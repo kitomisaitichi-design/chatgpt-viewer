@@ -14,8 +14,15 @@ class NativeConnection:
             self._start(False)
 
     def read_state(self):
-        try:return json.loads(self.state_file.read_text(encoding='utf-8'))
+        try:
+            value=json.loads(self.state_file.read_text(encoding='utf-8'))
+            if not isinstance(value,dict):raise ValueError('Native connection state must be an object')
+            return value
         except FileNotFoundError:return {}
+        except (OSError,UnicodeError,ValueError):
+            # Preserve the original state file for diagnosis. A corrupt helper
+            # checkpoint must not prevent the viewer from starting.
+            return dict(phase='error',error='Native connection state is unreadable; reconnect to recreate it.')
 
     def write(self,name,value):
         atomic_bytes(self.data/name,json.dumps(value).encode(),private=True)

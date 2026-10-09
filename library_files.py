@@ -18,7 +18,7 @@ def read_index(path):
 
 class FileCatalog:
     def __init__(self,archive):
-        self.archive=archive;self.lock=threading.RLock();self.signature=None;self.entries={};self.notes=[]
+        self.archive=archive;self.lock=threading.RLock();self.signature=None;self.entries={};self.notes=[];self.rejected={}
     def manifests(self):
         with self.archive.connect() as db:paths=[Path(r['manifest']) for r in db.execute('SELECT DISTINCT manifest FROM manifest_entries')]
         with self.archive.connect() as db:paths.extend(Path(r['path']) for r in db.execute('SELECT path FROM exporter_manifests'))
@@ -90,17 +90,39 @@ class FileCatalog:
             item['conversations']=[cid for cid in item['conversations'] if cid not in removed]
             item['source_refs']=[ref for ref in item['source_refs'] if ref.get('conversationId') not in removed]
         self.entries=entries;self.notes=notes;self.signature=signature
-    def available_path(self,item):
+        # Index rows can be rescanned/rebound to new source paths or hashes.
+        self.rejected.clear()
+    def available_path(self,item,verify_hash=True):
         target=item['target']
         if not target:return None
         try:
             if target.is_symlink() or not target.resolve().is_relative_to(item['root']):return None
             st=target.stat()
-            return target if target.is_file() and (item['size'] is None or st.st_size==item['size']) else None
+            if not target.is_file() or (item['size'] is not None and st.st_size!=item['size']):return None
+            expected=item.get('sha256')
+            if expected:
+                signature=(str(target.resolve()),st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns,st.st_ctime_ns,expected)
+                # Catalog enumeration can include multi-GiB videos. Hash only
+                # when opened, and remember a known mismatch in subsequent lists.
+                if not verify_hash:return None if self.rejected.get(item['key'])==signature else target
+                # On Windows a rewrite with the same length and restored mtime
+                # need not alter creation-time fields. Always rehash for delivery.
+                actual=hashlib.sha256()
+                with target.open('rb') as stream:
+                    while part:=stream.read(1024*1024):actual.update(part)
+                if actual.hexdigest().lower()!=str(expected).lower():
+                    self.rejected[item['key']]=signature
+                    return None
+                after=target.stat()
+                if (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)!=signature[1:6]:return None
+                self.rejected.pop(item['key'],None)
+            return target
         except OSError:return None
     def public(self,item):
-        target=item['target'];exists=bool(target and target.is_file() and not target.is_symlink() and target.resolve().is_relative_to(item['root']));actual=target.stat().st_size if exists else None
-        expected=item['size'];matches=exists and (expected is None or actual==expected)
+        target=item['target'];verified=self.available_path(item,verify_hash=False);matches=verified is not None
+        try:actual=target.stat().st_size if target and target.is_file() and not target.is_symlink() and target.resolve().is_relative_to(item['root']) else None
+        except OSError:actual=None
+        expected=item['size'];exists=actual is not None
         status='saved' if matches else 'missing' if item['status']=='saved' else item['status']
         return {k:item[k] for k in ('key','id','name','mime','error','conversations','manual_url','source','sha256','source_refs','sources','historical','retained','duplicate_of','version_info')} | {'size':actual if exists else expected,'status':status,'available':matches,'path':item['relative'],'image':bool(target and target.suffix.lower() in IMAGE_EXT)}
     def list(self,search='',status='all',conversation='',offset=0,limit=50,source='all'):
