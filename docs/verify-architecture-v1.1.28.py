@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 
 from browser_companion import BrowserCompanion
 from find_text import conversation_matches
-from viewer import Archive, Server, bounded_message_page
+from viewer import Archive, Server, VERSION, bounded_message_page
 
 
 def say(name, **facts):
@@ -141,7 +141,7 @@ def fixtures():
                 with opener.open(base_url + "/?token=" + server.token, timeout=3) as response:
                     response.read()
                 with opener.open(base_url + "/api/health", timeout=3) as response:
-                    assert json.load(response)["version"] == "1.1.28"
+                    assert json.load(response)["version"] == VERSION
                 with opener.open(base_url + "/api/messages?id=branch-audit", timeout=3) as response:
                     assert json.load(response)["total"] == 2
                 say("isolated-http", missing_cookie=403, authenticated=200, messages=200)

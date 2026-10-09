@@ -16,6 +16,8 @@
 
 Read, search and organize saved **ChatGPT, ChatGPT Work and Codex** conversations in a familiar local interface. Explore branches, documents, images and media; keep your place; organize your archive; and back it up without sending your chats to a hosted reader.
 
+**Latest update — v1.1.29:** Open indexed `.jsonl`, `.json` and `.md` source links from messages, preview JSONL attachments as readable text, and use source-aware local deletion. Includes a verified fix for rejecting Library files whose SHA-256 does not match their saved metadata. [Read the v1.1.29 changes](release-notes/v1.1.29.md).
+
 The Windows download includes **Python and offline rendering assets**. Standard reading needs no installer, subscription, API key, CDN or package setup. Optional online features remain under your control.
 
 ## See the Viewer in action
