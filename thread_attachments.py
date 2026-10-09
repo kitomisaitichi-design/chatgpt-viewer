@@ -31,7 +31,7 @@ def kind(name):
     if suffix=='.docx':return 'word'
     if suffix in ('.xlsx','.xls','.csv','.tsv'):return 'sheet'
     if suffix in ('.md','.markdown'):return 'markdown'
-    if suffix in ('.txt','.json','.log','.py','.js','.mjs','.cjs','.jsx','.ts','.tsx','.css','.html','.xml','.yaml','.yml','.toml','.sh','.ps1','.svg'):return 'text'
+    if suffix in ('.txt','.json','.jsonl','.ndjson','.log','.py','.js','.mjs','.cjs','.jsx','.ts','.tsx','.css','.html','.xml','.yaml','.yml','.toml','.sh','.ps1','.svg'):return 'text'
     return 'unsupported'
 
 class ThreadAttachments(ThreadImages):

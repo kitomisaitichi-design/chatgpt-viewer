@@ -12,7 +12,11 @@ import urllib.request
 
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent.parent))
 from linked_sources import parsed_file_links
+from thread_attachments import kind
 from viewer import Archive,Server
+
+assert kind('rollout-2026-10-09T03-32-20-example.jsonl')=='text'
+assert kind('events.ndjson')=='text'
 
 with tempfile.TemporaryDirectory(prefix='viewer-linked-sources-') as directory:
     root=pathlib.Path(directory)
