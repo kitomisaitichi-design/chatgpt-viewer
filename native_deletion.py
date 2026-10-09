@@ -222,6 +222,33 @@ class NativeDeletionQueue:
                     )
         return self.status()
 
+    def run_selected_local(self, ids):
+        """Start only these reviewed native Codex file removals asynchronously.
+
+        Unlike action('run'), unrelated queued ChatGPT/Codex jobs are not run.
+        Originals are unlinked only after source validation, private recovery
+        verification, and a check that Codex has closed.
+        """
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 1000 or len(set(ids)) != len(ids):
+            raise ValueError("Select 1 to 1000 distinct native Codex sessions")
+        self.enqueue(ids, mode="library")
+        with self.lock, self.connect() as db:
+            rows = [db.execute(
+                "SELECT id,state,run FROM native_deletion_jobs WHERE session_id=?", (cid,)
+            ).fetchone() for cid in ids]
+            if any(not row or row["state"] not in ("queued", "paused", "failed") for row in rows):
+                raise ValueError("A selected native Codex session is already running or deleted")
+            if any(row["run"] and row["state"]=="queued" for row in rows):
+                raise ValueError("A selected native Codex deletion has already started")
+            run_id = uuid.uuid4().hex
+            now = time.time()
+            db.executemany(
+                """UPDATE native_deletion_jobs SET state='queued',mode='library',run=?,error='',updated=?
+                   WHERE id=?""", [(run_id, now, row["id"]) for row in rows]
+            )
+        self.start()
+        return {"accepted": list(ids), "async": True, "native_codex": True}
+
     def rows(self):
         with self.connect() as db:
             return [dict(row) for row in db.execute(

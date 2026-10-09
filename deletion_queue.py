@@ -218,7 +218,7 @@ class DeletionQueue:
             proof=read(path)
             if (proof.get('schema')==SCHEMA and proof.get('cid')==row['cid']
                 and proof.get('scope')==row['scope'] and proof.get('verified') is True
-                and proof.get('state')=='confirmed' and proof.get('remote_state','deleted') in ('deleted','unavailable')):
+                and proof.get('state')=='confirmed' and proof.get('remote_state','deleted')=='deleted'):
                 proofs.append(proof)
         return max(proofs,key=lambda p:p.get('updated',0),default={})
     def tick(self):
@@ -236,7 +236,10 @@ class DeletionQueue:
                         previous=dict(proof,id=row['id'],run=row['run'],imported_from=proof['id'])
                         with self.archive.connect() as db:db.execute('UPDATE deletion_jobs SET receipt=? WHERE id=?',(json.dumps(previous),row['id']))
                 if previous.get('verified') is True and previous.get('state')=='confirmed':
-                    if row['mode']=='library':self.cleanup(row)
+                    if row['mode']=='library':
+                        if previous.get('remote_state','deleted')!='deleted':
+                            raise ValueError('ChatGPT did not confirm remote deletion; original local copy remains')
+                        self.cleanup(row)
                     with self.archive.connect() as db:db.execute("UPDATE deletion_jobs SET state='confirmed',error='' WHERE id=?",(row['id'],))
                     continue
                 self.snapshot(row)
@@ -276,10 +279,20 @@ class DeletionQueue:
                 # never issues the destructive remote request a second time.
                 with self.archive.connect() as db:db.execute('UPDATE deletion_jobs SET receipt=? WHERE id=?',(json.dumps(receipt),row['id']))
                 if row['mode']=='library':
-                    try:self.cleanup(row)
-                    except Exception as error:
-                        state='failed';receipt['error']='Remote result verified; retry local cleanup: '+str(error)
-                elif remote=='deleted':self.archive.organize(row['cid'],{'trashed':1})
+                    if remote!='deleted':
+                        state='failed'
+                        receipt['error']='ChatGPT did not confirm deletion. Original local files were kept.'
+                    else:
+                        try:self.cleanup(row)
+                        except Exception as error:
+                            state='failed';receipt['error']='Remote deletion verified; retry local cleanup: '+str(error)
+                elif remote=='deleted':
+                    # Preserve the saved source bytes, not the indexed entry.
+                    # Local-only conversations take a separate offline route.
+                    self.archive.remove_local_chat(row['cid'])
+                else:
+                    state='failed'
+                    receipt['error']='ChatGPT did not confirm deletion. Original local files were kept.'
             elif row['state']=='paused' and state in ('running','retrying'):continue
             with self.archive.connect() as db:db.execute('UPDATE deletion_jobs SET state=?,updated=?,error=?,receipt=? WHERE id=?',(state,time.time(),receipt.get('error',''),json.dumps(receipt),row['id']))
         # Completed metadata must not exhaust the browser's bounded active inbox.

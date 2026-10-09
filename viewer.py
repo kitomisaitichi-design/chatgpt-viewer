@@ -301,7 +301,7 @@ class Archive:
         self.mp=multiprocessing.get_context('spawn');self.foreground=self.mp.Event();self.foreground_count=0;self.foreground_lock=threading.Lock()
         self.status=dict(scanning=False,phase='Ready',files=0,indexed=0,errors=[],roots=[])
         self.ui_cache=None;self.ui_cache_lock=threading.Lock();self.live_sources={};self.cache_stop=threading.Event();self.cache_thread=None
-        self.semantic_lock=threading.Lock(); self.semantic_model=None; self.semantic_ready_epoch=None; self.semantic_state={'ready':False,'building':False,'count':0,'error':''}
+        self.semantic_lock=threading.Lock(); self.semantic_model=None; self.semantic_state={'ready':False,'building':False,'count':0,'error':''}
         if not initialize:return
         with self.connect() as db:
             db.execute('PRAGMA journal_mode=WAL')
@@ -349,7 +349,6 @@ class Archive:
         # Tombstone and indexes commit together. Concurrent discovery checks this
         # same database before writing, including in the separate scan process.
         with self.lock,self.connect() as db:
-            db.execute("INSERT INTO settings(key,value) VALUES('ftsEpochV1','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1")
             db.execute('INSERT OR IGNORE INTO local_removals VALUES(?,?)',(cid,time.time()))
             db.execute('DELETE FROM chunks WHERE cid=?',(cid,))
             db.execute('DELETE FROM titles WHERE cid=?',(cid,))
@@ -518,7 +517,7 @@ class Archive:
             self.source_link_cache={key:links}
         links=self.source_link_cache[key]
         return {ref:exact.get(ref) or links[ref] for ref in requested[:100] if ref in exact or ref in links and len(links[ref])==1}
-    def message_fragment(self,cid,seq,offset=0,leaf=None,budget=24576,expected_hash=None):
+    def message_fragment(self,cid,seq,offset=0,leaf=None,budget=24576):
         seq=int(seq);offset=max(0,int(offset))
         budget=max(4096,min(int(budget),131072))
         if leaf:
@@ -539,10 +538,7 @@ class Archive:
                 if row is None:
                     page=self.foreground_page(cid,None,seq,1,True);row=next((m for m in page['messages'] if m['seq']==seq),None)
         if not row:raise ValueError('Saved message not found.')
-        text=row['text']
-        if expected_hash and not secrets.compare_digest(hashlib.sha256(text.encode('utf-8')).hexdigest(),expected_hash):
-            raise ValueError('This saved conversation changed while loading a long message. Reopen it to load the current version.')
-        part=bounded_text(text[offset:offset+budget],budget);end=offset+len(part)
+        text=row['text'];part=bounded_text(text[offset:offset+budget],budget);end=offset+len(part)
         return dict(text=part,next_offset=end,complete=end>=len(text),length=len(text))
     def catalog_batch(self,offset=0,limit=25,priority=''):
         offset=max(0,int(offset));limit=max(1,min(int(limit),25))
@@ -906,7 +902,6 @@ class Archive:
         updated=item['updated'] or max((m['time'] for m in msgs if m['time']),default=created)
         with self.lock,self.connect() as db:
             if db.execute('SELECT 1 FROM local_removals WHERE cid=?',(cid,)).fetchone():return
-            db.execute("INSERT INTO settings(key,value) VALUES('ftsEpochV1','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1")
             if not db.execute("SELECT 1 FROM settings WHERE key='ftsRowMapV1'").fetchone():
                 db.execute('INSERT OR IGNORE INTO chunk_rows SELECT cid,rowid FROM chunks')
                 db.execute('INSERT OR REPLACE INTO title_rows SELECT cid,rowid FROM titles')
@@ -931,9 +926,6 @@ class Archive:
     def page(self,cid,before=None,around=None,limit=100,details=False,after=None):
         limit=max(1,min(int(limit),200));predicate='' if details else ' AND visible=1'
         with self.connect() as db:
-            # A plain sqlite3 context manager does not begin a read snapshot.
-            # These four SELECTs must agree if a scanner commits mid-page.
-            db.execute('BEGIN')
             known=db.execute('SELECT id FROM chats WHERE id=?',(cid,)).fetchone()
             if not known:
                 source=db.execute('SELECT path FROM manifest_entries WHERE cid=? AND available=1',(cid,)).fetchone()
@@ -1013,11 +1005,6 @@ class Archive:
             if key not in used:used.add(key);clean.append(r)
         used_mode='keyword' if mode=='keyword' else 'smart (text + related words)'
         if mode in ('semantic','hybrid'):
-            if self.semantic_state['ready']:
-                with self.connect() as db:
-                    row=db.execute("SELECT value FROM settings WHERE key='ftsEpochV1'").fetchone()
-                if (int(row[0]) if row else 0)!=self.semantic_ready_epoch:
-                    self.semantic_state['ready']=False
             if not self.semantic_state['ready']:
                 self.request_semantic()
                 return {'results':clean[:60],'mode':used_mode,'notice':self.semantic_state.get('phase') or 'Semantic setup/indexing started in the background. Progress is shown in Settings; text results remain available.'}
@@ -1040,8 +1027,6 @@ class Archive:
             threading.Thread(target=self.build_semantic,daemon=True).start()
     def build_semantic(self,allow_setup=True):
         if not self.semantic_lock.acquire(False):return
-        self.semantic_ready_epoch=None
-        self.semantic_state['ready']=False
         self.semantic_state.update(building=True,error='',count=0,phase='Preparing local semantic search…')
         try:
             modelpath=APP/'models'/'semantic'
@@ -1061,11 +1046,7 @@ class Archive:
             from sentence_transformers import SentenceTransformer
             self.semantic_state['phase']='Loading the local meaning model…'
             self.semantic_model=SentenceTransformer(str(modelpath),local_files_only=True,device='cpu')
-            with self.connect() as db:
-                db.execute('BEGIN')
-                rows=list(db.execute('SELECT cid,seq,title,text FROM chunks'))
-                epoch_row=db.execute("SELECT value FROM settings WHERE key='ftsEpochV1'").fetchone()
-                snapshot_epoch=int(epoch_row[0]) if epoch_row else 0
+            with self.connect() as db: rows=list(db.execute('SELECT cid,seq,title,text FROM chunks'))
             self.semantic_state['phase']='Indexing saved messages'
             counts={};batch=[]
             with self.lock,self.connect() as db:db.execute('DELETE FROM vectors')
@@ -1075,17 +1056,7 @@ class Archive:
                 if len(batch)>=32:
                     self._embed_batch(batch,np);batch=[]
             if batch:self._embed_batch(batch,np)
-            stale_build=False
-            with self.lock,self.connect() as db:
-                epoch_row=db.execute("SELECT value FROM settings WHERE key='ftsEpochV1'").fetchone()
-                current_epoch=int(epoch_row[0]) if epoch_row else 0
-                if current_epoch!=snapshot_epoch:
-                    db.execute('DELETE FROM vectors')
-                    stale_build=True
-                else:
-                    self.semantic_ready_epoch=snapshot_epoch
-                    self.semantic_state.update(ready=True,count=len(rows),phase='')
-            if stale_build:raise RuntimeError('The archive changed during semantic indexing. Search again to rebuild the current version.')
+            self.semantic_state.update(ready=True,count=len(rows),phase='')
         except Exception as e:self.semantic_state.update(ready=False,error=str(e),phase='')
         finally:self.semantic_state['building']=False;self.semantic_lock.release()
     def _embed_batch(self,batch,np):
@@ -1211,8 +1182,7 @@ def bounded_message_page(page,budget=32768,around=None,forward=False):
     for m in page['messages']:
         part=bounded_text(m['text'],min(16384,budget//2))
         if len(part)<len(m['text']):
-            m=dict(m,text=part,text_complete=False,text_next=len(part),text_length=len(m['text']),
-                   text_hash=hashlib.sha256(m['text'].encode('utf-8')).hexdigest())
+            m=dict(m,text=part,text_complete=False,text_next=len(part),text_length=len(m['text']))
         # Large web-search metadata must not defeat the message byte budget.
         # Resolve omitted references on demand for this exact message.
         extras=m.get('extras') or {}
@@ -1269,7 +1239,7 @@ class Server(ThreadingHTTPServer):
     def __init__(self,address,archive):
         super().__init__(address,Handler);self.archive=archive;self.token=secrets.token_urlsafe(32)
         self.cookie_name='viewer_token_'+str(self.server_port)
-        self.transfer_lock=threading.Lock();self.transfers={};self.recent_transfers=[];self.renderer_cache={};self.settings_write_lock=threading.RLock()
+        self.transfer_lock=threading.Lock();self.transfers={};self.recent_transfers=[];self.renderer_cache={}
         from archive_backup import BackupManager
         self.backup=BackupManager(archive,APP)
         from library_files import FileCatalog
@@ -1289,13 +1259,147 @@ class Server(ThreadingHTTPServer):
         self.deletions.start()
         self.native.deletion_queue.start()
         self.queue_lock=threading.RLock()
+        from local_choice import LocalChoiceQueue
+        self.local_choice=LocalChoiceQueue(archive)
         from release_checks import ReleaseChecks
         self.releases=ReleaseChecks(archive,VERSION)
     def deletion_status(self):
         value=self.deletions.status();catalog=dict(self.archive.ui_cache['chats']) if self.archive.ui_cache else {c['id']:c for c in self.archive.catalog()}
         for row in self.native.deletion_queue.rows():
             value['jobs'].append(dict(row,cid=row['session_id'],local=True,title=row.get('title') or catalog.get(row['session_id'],{}).get('alias') or catalog.get(row['session_id'],{}).get('title') or row['session_id'],message='Waiting until Codex is closed' if row['state']=='waiting' else '',remote_state='local-removed' if row['state']=='confirmed' else ''))
-        value['removed']=sorted(self.archive.removed_ids());value['jobs'].sort(key=lambda r:(r['created'],r['id']));value['native_connection']=self.native_connection.status();return value
+        for row in self.local_choice.rows():
+            value['jobs'].append(dict(row,local=True,local_choice=True,
+                title=row['title'],created=row['updated'],message=(
+                    'Saved source kept; removing from viewer index' if row['mode']=='preserve'
+                    else 'Removing verified local-only source and index')))
+        value['removed']=sorted(self.archive.removed_ids());value['jobs'].sort(key=lambda r:(r['created'],r['id']));value['native_connection']=self.native_connection.status()
+        return value
+    def deletion_choices(self,ids):
+        if not isinstance(ids,list) or not ids or len(ids)>1000 or any(not isinstance(cid,str) for cid in ids):
+            raise ValueError('Select one or more saved chats')
+        catalog={c['id']:c for c in self.archive.catalog()}
+        if any(cid not in catalog for cid in ids):raise ValueError('One or more selected conversations are no longer indexed')
+        scopes=self.deletions.roots()
+        result=[]
+        with self.archive.connect() as db:
+            for cid in ids:
+                c=catalog[cid];path=Path(c['path'])
+                if c['kind']=='codex' and path.suffix.lower()=='.jsonl':
+                    try:self.native.deletion_queue._validate_session(path,cid)
+                    except (ValueError,OSError):kind='unknown'
+                    else:kind='native'
+                else:
+                    entries=[dict(r) for r in db.execute('SELECT manifest,metadata FROM manifest_entries WHERE cid=?',(cid,))]
+                    manifests=[Path(r['manifest']).parent.resolve() for r in entries]
+                    scoped={scopes[r] for r in manifests if r in scopes}
+                    remote=db.execute("SELECT state,scope FROM remote_chat_state WHERE cid=? ORDER BY checked DESC LIMIT 1",(cid,)).fetchone()
+                    explicit=False
+                    temporary=False
+                    try:
+                        if path.suffix.lower()=='.json':
+                            head=source_header(path)
+                            temporary=(head.get('is_temporary_chat') is True or
+                                       isinstance(head.get('metadata'),dict) and head['metadata'].get('is_temporary_chat') is True)
+                            explicit=isinstance(head.get('url'),str) and bool(re.fullmatch(r'https://(?:chatgpt\.com|chat\.openai\.com)/c/[\w-]+/?',head['url']))
+                        elif path.suffix.lower()=='.md':
+                            with path.open(encoding='utf-8-sig',errors='replace') as f:begin=f.read(8192)
+                            explicit=bool(re.search(r'(?m)^Conversation:\s+https://(?:chatgpt\.com|chat\.openai\.com)/c/[\w-]+',begin))
+                    except (OSError,ValueError,UnicodeError):pass
+                    # The saved Markdown can contain a synthetic /c/ URL while
+                    # its same-CID JSON companion identifies a temporary chat.
+                    # Check only manifest-authorized companion paths and verify
+                    # their source conversation ID before using the flag.
+                    if not temporary:
+                        for entry in entries:
+                            try:
+                                meta=json.loads(entry['metadata'] or '{}')
+                                name=meta.get('json')
+                                if not isinstance(name,str) or not name:continue
+                                parent=Path(entry['manifest']).parent.resolve()
+                                companion=(parent/name).resolve()
+                                if not companion.is_relative_to(parent) or companion.suffix.lower()!='.json' or companion.is_symlink():continue
+                                head=source_header(companion)
+                                if str(head.get('conversation_id') or head.get('id') or '')!=cid:continue
+                                if head.get('is_temporary_chat') is True or isinstance(head.get('metadata'),dict) and head['metadata'].get('is_temporary_chat') is True:
+                                    temporary=True
+                                    break
+                            except (ValueError,OSError,TypeError):continue
+                    if temporary:kind='temporary'
+                    elif remote and remote['state']=='deleted':kind='orphan'
+                    elif scoped or remote and remote['state']=='available' or explicit:kind='linked'
+                    elif cid.startswith('local-') and not manifests:kind='orphan'
+                    else:kind='unknown'
+                result.append(dict(id=cid,kind=kind,title=c.get('alias') or c.get('title') or cid))
+        return dict(choices=result)
+    def deletion_submit(self,ids,mode):
+        if mode not in ('delete','preserve'):raise ValueError('Choose delete or preserve local copy')
+        choices=self.deletion_choices(ids)['choices']
+        types={r['kind'] for r in choices}
+        if len(types)!=1:raise ValueError('Select chats with the same source type, or queue them separately')
+        category=next(iter(types))
+        if mode=='delete':
+            if category=='native':return self.remove_native_codex_locally(ids)
+            if category=='linked':return self.queue_add(ids,'library')
+            if category=='unknown':raise ValueError('ChatGPT ownership is unknown. Cannot safely delete this chat remotely or delete its only source.')
+        if mode=='preserve' and category=='linked':
+            # ChatGPT-linked preserve still deletes remotely. The original
+            # saved source is retained, then hidden from the viewer after a
+            # confirmed remote deletion receipt.
+            return self.queue_add(ids,'preserve')
+        with self.queue_lock:
+            # When preserving the local source, cancel any *not-started*
+            # remote job for these IDs. In-flight ChatGPT requests are refused.
+            affected=[r for r in self.deletions.rows() if r['cid'] in ids and r['state'] not in ('confirmed','cancelled')]
+            native_pending=[r for r in self.native.deletion_queue.rows()
+                            if r['session_id'] in ids and r['state'] not in ('confirmed','cancelled')]
+            if any(r['state'] not in ('queued','paused','failed') or r['state']=='queued' and r['run']
+                   for r in native_pending):
+                raise ValueError('A native Codex deletion is already running. Wait until it finishes before keeping the original.')
+            if any(r['state'] not in ('queued','paused','failed') for r in affected):
+                raise ValueError('A ChatGPT deletion is active. Stop it and wait for any request to finish.')
+            with self.archive.connect() as db:
+                for r in affected:
+                    lease=db.execute('SELECT phase,lease FROM browser_requests WHERE job=?',(r['id'],)).fetchone()
+                    if lease and (lease['lease'] or lease['phase'] not in ('done','')):
+                        raise ValueError('A ChatGPT request could still be in flight; local-only choice was not applied.')
+            if affected:
+                all_active=[r for r in self.deletions.rows() if r['state'] in ('preparing','waiting','running','retrying')]
+                if all_active:raise ValueError('Another ChatGPT deletion is active. Wait until it finishes before changing local retention.')
+                self.deletions.control(False)
+                with self.deletions.lock:
+                    for r in affected:
+                        source=Path(r['root'])/'.viewer-queue/commands'/(r['id']+'.json')
+                        if source.exists() and not source.is_symlink():
+                            dest=source.parent.parent/'history'/'cancelled-local-choice'/(r['id']+'.json')
+                            dest.parent.mkdir(parents=True,exist_ok=True)
+                            source.replace(dest)
+                    with self.archive.connect() as db:
+                        db.executemany("UPDATE deletion_jobs SET state='cancelled',updated=? WHERE id=? AND state IN ('queued','paused','failed')",
+                                       [(time.time(),r['id']) for r in affected])
+            if native_pending:
+                with self.native.deletion_queue.lock,self.native.deletion_queue.connect() as db:
+                    db.executemany("UPDATE native_deletion_jobs SET state='cancelled',updated=? WHERE id=? AND state IN ('queued','paused','failed')",
+                                   [(time.time(),r['id']) for r in native_pending])
+            if category=='native' and mode=='preserve':
+                exclude=set(self.archive.settings().get('nativeCodexExcludedSessions',[]))
+                self.archive.save_settings({'nativeCodexExcludedSessions':sorted(exclude|set(ids))})
+            catalog={c['id']:c for c in self.archive.catalog()}
+            selected=[(r['id'],r['title'],catalog[r['id']]['path']) for r in choices]
+            return self.local_choice.enqueue(selected,mode)
+    def remove_native_codex_locally(self,ids):
+        if not isinstance(ids,list) or not 1<=len(ids)<=1000 or any(not isinstance(cid,str) or not cid for cid in ids):
+            raise ValueError('Select between 1 and 1000 native Codex sessions')
+        if len(set(ids))!=len(ids):raise ValueError('Remove duplicate Codex sessions')
+        with self.queue_lock:
+            catalog={c['id']:c for c in self.archive.catalog()}
+            for cid in ids:
+                c=catalog.get(cid)
+                if not c or c['kind']!='codex' or Path(c['path']).suffix.lower()!='.jsonl':
+                    raise ValueError('Local-only deletion is restricted to native Codex JSONL sessions; ChatGPT exporter chats cannot be deleted by this action')
+                # Reject copied JSONL files, misleading type overrides and
+                # arbitrary filesystem paths. Validate source header + CODEX_HOME.
+                self.native.deletion_queue._validate_session(Path(c['path']),cid)
+            return self.native.deletion_queue.run_selected_local(ids)
     def queue_add(self,ids,mode):
         if not isinstance(ids,list) or not 0<len(ids)<=1000:raise ValueError('Select between 1 and 1000 chats')
         with self.queue_lock:
@@ -1307,7 +1411,7 @@ class Server(ThreadingHTTPServer):
             return self.deletion_status()
     def queue_action(self,action,ids):
         with self.queue_lock:
-            value=self.deletion_status();pending=[r for r in value['jobs'] if r['state'] not in ('confirmed','cancelled')]
+            value=self.deletion_status();pending=[r for r in value['jobs'] if not r.get('local_choice') and r['state'] not in ('confirmed','cancelled')]
             if action=='run':
                 if not pending or set(ids or [])!={r['id'] for r in pending}:raise ValueError('The queue changed. Review every pending chat before running')
                 if any(r['state'] in ('preparing','waiting','running','retrying') or r.get('local') and r['run'] and r['state']=='queued' for r in pending):raise ValueError('The queue is already running')
@@ -1317,6 +1421,7 @@ class Server(ThreadingHTTPServer):
             if local:self.native.deletion_queue.action(action,local)
             return self.deletion_status()
     def server_close(self):
+        if hasattr(self,'local_choice'):self.local_choice.close()
         if hasattr(self,'native_connection'):self.native_connection.close()
         if hasattr(self,'native'):self.native.close()
         if hasattr(self,'deletions'):self.deletions.close()
@@ -1458,9 +1563,7 @@ class Handler(BaseHTTPRequestHandler):
                 if b'\x00' in part:raise ValueError('This file contains binary data. Download it to open it.')
                 self.send(dict(text=part[:32768].decode('utf-8-sig',errors='replace'),truncated=len(part)>32768,name=f.name));return
             if url.path=='/api/message-text':
-                if int(q.get('offset',0))>0 and not q.get('hash'):
-                    raise ValueError('Message version token missing. Reopen the conversation to load the current text.')
-                with a.foreground_read():self.send(a.message_fragment(q['id'],q['seq'],q.get('offset',0),q.get('leaf'),q.get('bytes',24576),q.get('hash')))
+                with a.foreground_read():self.send(a.message_fragment(q['id'],q['seq'],q.get('offset',0),q.get('leaf'),q.get('bytes',24576)))
                 return
             if url.path=='/api/renderer':
                 names={'marked':'vendor/marked.js','katex':'vendor/katex/katex.min.js','highlight':'vendor/highlight.js'};name=q.get('name')
@@ -1584,11 +1687,7 @@ class Handler(BaseHTTPRequestHandler):
                 if 'releaseCheckHours' in d:
                     from release_checks import interval
                     if type(d['releaseCheckHours']) is not int or d['releaseCheckHours'] not in (0,12,24,168):raise ValueError('Choose 12h, 24h, weekly or off')
-                # Concurrent HTTP handlers must commit settings requests in
-                # arrival order, rather than whichever completes last.
-                with self.server.settings_write_lock:
-                    a.save_settings(d)
-                    self.server.releases.reschedule()
+                a.save_settings(d);self.server.releases.reschedule()
             elif self.path=='/api/remote-status/check':self.send(self.server.deletions.check_remote(d.get('id')));return
             elif self.path=='/api/connection/open-folder':
                 folder=Path(self.server.deletions.browser.setup()['folder'])
@@ -1597,6 +1696,9 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path in ('/api/connection/connect','/api/connection/reconnect'):self.send(self.server.native_connection.connect());return
             elif self.path=='/api/delete-queue/add':self.send(self.server.queue_add(d.get('ids'),d.get('mode','library')));return
             elif self.path=='/api/delete-queue/action':self.send(self.server.queue_action(d.get('action'),d.get('ids')));return
+            elif self.path=='/api/delete-choice/inspect':self.send(self.server.deletion_choices(d.get('ids')));return
+            elif self.path=='/api/delete-choice/submit':self.send(self.server.deletion_submit(d.get('ids'),d.get('mode')));return
+            elif self.path=='/api/local-codex/remove':self.send(self.server.remove_native_codex_locally(d.get('ids')));return
             elif self.path=='/api/delete-queue/install-bridge':
                 import importlib.util
                 spec=importlib.util.spec_from_file_location('viewer_exporter_install',APP/'integration/install-exporter-bridge.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)

@@ -1,7 +1,7 @@
 'use strict';
 window.ViewerControls=(()=>{
  const icon=(b,n,label='')=>ViewerIcons.set(b,n,label);
- async function theme(value){const previous=S.settings.theme||'dark',writes=[];if(value==='light'&&previous!=='light')writes.push(saveSetting('lastDarkTheme',previous));writes.push(saveSetting('theme',value));if(value!=='light')writes.push(saveSetting('lastDarkTheme',value));applyAppearance();await Promise.all(writes);}
+ async function theme(value){const previous=S.settings.theme||'dark';if(value==='light'&&previous!=='light')await saveSetting('lastDarkTheme',previous);await saveSetting('theme',value);if(value!=='light')await saveSetting('lastDarkTheme',value);applyAppearance();}
  function init(){const bar=document.querySelector('.header-right');for(const [id,n] of [['chat-files-open','file'],['chat-images-open','image'],['inchat-open','search'],['pin-chat','star'],['chat-menu','more']]){const b=document.getElementById(id);if(b)icon(b,n);}
   const bulb=el('button','icon'),palette=el('button','icon'),copy=el('button','thread-copy');bulb.id='brightness-toggle';bulb.title='Toggle light / dark';bulb.setAttribute('aria-label',bulb.title);icon(bulb,'bulb');bulb.onclick=safeRun(()=>theme(S.settings.theme==='light'?(S.settings.lastDarkTheme||'dark'):'light'));
   palette.id='theme-picker-open';palette.title='Choose theme';palette.setAttribute('aria-label',palette.title);palette.setAttribute('aria-haspopup','dialog');icon(palette,'palette');

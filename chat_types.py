@@ -86,7 +86,7 @@ def _header(path,mtime,size):
                 # Nested exporter envelopes are supported after full parsing.
                 break
             value,pos=decoder.raw_decode(head,pos)
-            if key in (*PRODUCT_FIELDS,*MODELS,'metadata','originator','id','conversation_id','title','create_time','update_time','url','project','account','subscription','owner','account_plan','plan_type','account_type','subscription_plan','subscription_tier','is_free_user','is_free_account','is_paid_user','is_paid_account'):result[key]=value
+            if key in (*PRODUCT_FIELDS,*MODELS,'metadata','originator','id','conversation_id','title','create_time','update_time','url','project','account','subscription','owner','account_plan','plan_type','account_type','subscription_plan','subscription_tier','is_free_user','is_free_account','is_paid_user','is_paid_account','is_temporary_chat'):result[key]=value
         except (ValueError,IndexError):break
     return result
 

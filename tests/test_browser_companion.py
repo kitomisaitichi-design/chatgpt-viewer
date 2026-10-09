@@ -59,7 +59,10 @@ class BrowserQueue(unittest.TestCase):
         req=self.request();self.assertEqual(req['phase'],'delete')
         self.result(req,dict(ok=True,status=200));req=self.request();self.assertEqual(req['phase'],'verify')
         self.result(req,dict(ok=False,status=404));self.q.tick()
-        self.assertEqual(self.q.rows()[0]['state'],'confirmed');self.assertEqual(self.a.catalog()[0]['remote_state'],'deleted');self.assertTrue(self.path.exists())
+        self.assertEqual(self.q.rows()[0]['state'],'confirmed')
+        self.assertEqual(self.a.catalog(),[])
+        self.assertIn(row['cid'],self.a.removed_ids())
+        self.assertTrue(self.path.exists())
         with self.assertRaises(ValueError):self.result(req,dict(ok=False,status=404))
 
     def test_native_owner_precedes_extension_but_matching_exporter_can_handoff(self):

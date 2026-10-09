@@ -132,25 +132,6 @@ def phrase_search(archive,q,typos=False,cid=None,cids=None):
                     groups.append('('+' OR '.join(options)+')')
                 rows+=fetch(' AND '.join(groups))
                 if len(rows)<30:rows+=fetch(' OR '.join(groups),180)
-    # An exact phrase can span the 200-character overlap of adjacent FTS
-    # chunks. Use the first and last word as independent *message* candidates
-    # and verify the complete body; matching within one chunk is insufficient.
-    if not typos and len(q)>180 and words:
-        first='"'+words[0].replace('"','""')+'"'
-        last='"'+words[-1].replace('"','""')+'"'
-        clause='SELECT cid,seq FROM chunks WHERE chunks MATCH ?'+condition
-        terms=[('text : ('+first+')',*params)]
-        if first!=last:
-            clause+=' INTERSECT SELECT cid,seq FROM chunks WHERE chunks MATCH ?'+condition
-            terms.append(('text : ('+last+')',*params))
-        with archive.connect() as db:
-            for row in db.execute(
-                'SELECT m.cid,m.seq,c.title,m.text FROM ('+clause+') hits '
-                'JOIN messages m ON m.cid=hits.cid AND m.seq=hits.seq '
-                'JOIN chats c ON c.id=m.cid WHERE m.visible=1 LIMIT 1000',
-                [arg for term in terms for arg in term]
-            ):
-                rows.append(dict(row))
     seen=set()
     for r in rows:
         key=(r['cid'],r['seq'],r['text'])

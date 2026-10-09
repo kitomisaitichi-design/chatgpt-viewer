@@ -108,9 +108,7 @@ class BrowserCompanion:
         root,scope=self.queue.chat_account(cid)
         if scope=='unbound':return dict(queued=False,message='Connect a signed-in ChatGPT tab first')
         with self.archive.connect() as db:
-            # Completed checks have no pollable work and must not suppress a fresh
-            # remote-status inspection during the 15-minute in-flight dedupe window.
-            old=db.execute('SELECT id FROM browser_checks WHERE cid=? AND scope=? AND done=0 AND created>? ORDER BY created DESC LIMIT 1',(cid,scope,time.time()-900)).fetchone()
+            old=db.execute('SELECT id FROM browser_checks WHERE cid=? AND scope=? AND created>?',(cid,scope,time.time()-900)).fetchone()
             if old:return dict(queued=True,id=old['id'])
             ident=uuid.uuid4().hex
             db.execute('DELETE FROM browser_checks WHERE created<?',(time.time()-1800,))

@@ -33,92 +33,59 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 class Drive:
     def __init__(self,data_dir):
-        self.path=Path(data_dir)/'google-connection.secure';self.lock=threading.RLock();self.login={'phase':'disconnected'};self.listener=None;self.epoch=0
+        self.path=Path(data_dir)/'google-connection.secure';self.lock=threading.RLock();self.login={'phase':'disconnected'};self.listener=None
     def status(self):
-        with self.lock:
-            data=read_private(self.path)
-            return dict(self.login,connected=bool(data.get('refresh_token')),client_ready=bool(data.get('client_id')),account=data.get('account',''))
+        data=read_private(self.path)
+        return dict(self.login,connected=bool(data.get('refresh_token')),client_ready=bool(data.get('client_id')),account=data.get('account',''))
     def configure(self,document):
         installed=document.get('installed') if isinstance(document,dict) else None
         if not isinstance(installed,dict) or not re.fullmatch(r'[a-zA-Z0-9.-]+\.apps\.googleusercontent\.com',str(installed.get('client_id',''))):raise ValueError('Choose the JSON for a Google OAuth Desktop app, not a service account or web app.')
         with self.lock:
-            self.epoch+=1
-            listener=self.listener;self.listener=None
-            self.login={'phase':'disconnected'}
             old=read_private(self.path)
             if old.get('client_id')!=installed['client_id']:old={}
             old.update(client_id=installed['client_id'],client_secret=str(installed.get('client_secret','')))
             save_private(self.path,old)
-        self.stop_listener(listener)
         return self.status()
-    @staticmethod
-    def stop_listener(listener):
-        if listener is not None:threading.Thread(target=listener.shutdown,daemon=True).start()
     def disconnect(self):
         # Forget local credentials; no remote files are deleted.
         with self.lock:
-            self.epoch+=1
-            listener=self.listener;self.listener=None
             data=read_private(self.path);save_private(self.path,{k:data[k] for k in ('client_id','client_secret') if k in data});self.login={'phase':'disconnected'}
-        self.stop_listener(listener)
+        if self.listener:threading.Thread(target=self.listener.shutdown,daemon=True).start()
     def connect(self):
         with self.lock:
             data=read_private(self.path)
             if not data.get('client_id'):raise ValueError('Import your Google Desktop app connection JSON first. The setup guide explains the one-time registration.')
             if self.login.get('phase')=='waiting':return self.status()
-            self.epoch+=1
-            epoch=self.epoch
             verifier=secrets.token_urlsafe(48);state=secrets.token_urlsafe(32);drive=self
-            def active(listener):
-                return drive.epoch==epoch and drive.listener is listener
             class Callback(BaseHTTPRequestHandler):
                 def log_message(self,*args):pass
                 def do_GET(self):
                     q=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                     if not secrets.compare_digest(q.get('state',[''])[0],state):self.send_error(400,'This connection request has expired.');return
-                    listener=self.server
                     try:
                         if q.get('error'):raise ValueError('Google connection was declined. You can try again.')
                         code=q.get('code',[''])[0]
                         if not code:raise ValueError('Google did not return a connection code.')
                         token=drive._token(dict(client_id=data['client_id'],client_secret=data.get('client_secret',''),code=code,code_verifier=verifier,redirect_uri=redirect,grant_type='authorization_code'))
                         if not token.get('refresh_token'):raise ValueError('Google did not grant offline access. Remove the old app permission in your Google account and connect again.')
-                        with drive.lock:
-                            if not active(listener):raise RuntimeError('This Google connection request has expired.')
-                            # Re-read credentials so an earlier callback never
-                            # resurrects an invalidated connection or old client.
-                            saved=read_private(drive.path)
-                            if saved.get('client_id')!=data['client_id']:raise RuntimeError('Google client settings changed during sign-in.')
-                            saved.update(token);saved['expires_at']=time.time()+token.get('expires_in',3600)
-                            save_private(drive.path,saved)
+                        data.update(token);data['expires_at']=time.time()+token.get('expires_in',3600)
+                        save_private(drive.path,data)
                         try:
-                            account=drive.request('GET',API+'about?fields=user(emailAddress,displayName)')['user']
-                            label=account.get('emailAddress') or account.get('displayName','Connected account')
-                        except Exception:label='Connected Google account'
-                        with drive.lock:
-                            if not active(listener):raise RuntimeError('This Google connection request has expired.')
-                            saved=read_private(drive.path);saved['account']=label;save_private(drive.path,saved)
-                            drive.login={'phase':'connected'}
-                        message='Google Drive is connected. Return to the viewer and choose your backup folder.'
-                    except Exception as error:
-                        with drive.lock:
-                            if active(listener):drive.login={'phase':'error','error':str(error)}
-                        message='Connection was not completed. Return to the viewer for details.'
-                    body=('<!doctype html><meta charset="utf-8"><title>Offline Chat Viewer</title><p>'+message+'</p>').encode();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(body)));self.send_header('Content-Security-Policy',"default-src 'none'");self.end_headers();self.wfile.write(body);drive.stop_listener(listener)
+                            account=drive.request('GET',API+'about?fields=user(emailAddress,displayName)')['user'];data['account']=account.get('emailAddress') or account.get('displayName','Connected account');save_private(drive.path,data)
+                        except Exception:data['account']='Connected Google account';save_private(drive.path,data)
+                        drive.login={'phase':'connected'};message='Google Drive is connected. Return to the viewer and choose your backup folder.'
+                    except Exception as error:drive.login={'phase':'error','error':str(error)};message='Connection was not completed. Return to the viewer for details.'
+                    body=('<!doctype html><meta charset="utf-8"><title>Offline Chat Viewer</title><p>'+message+'</p>').encode();self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(body)));self.send_header('Content-Security-Policy',"default-src 'none'");self.end_headers();self.wfile.write(body);threading.Thread(target=drive.listener.shutdown,daemon=True).start()
             self.listener=HTTPServer(('127.0.0.1',0),Callback);redirect='http://127.0.0.1:'+str(self.listener.server_port)+'/'
             # Metadata is read-only; file writes are restricted to files created by this OAuth app.
             query=dict(client_id=data['client_id'],redirect_uri=redirect,response_type='code',scope='https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly',state=state,code_challenge=base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('='),code_challenge_method='S256',access_type='offline',prompt='consent select_account')
             self.login={'phase':'waiting'}
-            listener=self.listener
             def listen():
-                timer=threading.Timer(300,listener.shutdown);timer.daemon=True;timer.start()
-                try:listener.serve_forever()
+                timer=threading.Timer(300,self.listener.shutdown);timer.daemon=True;timer.start()
+                try:self.listener.serve_forever()
                 finally:
-                    timer.cancel();listener.server_close()
-                    with self.lock:
-                        if active(listener):
-                            self.listener=None
-                            if self.login.get('phase')=='waiting':self.login={'phase':'error','error':'Google sign-in timed out. Select Connect again.'}
+                    timer.cancel();self.listener.server_close()
+                    if self.login.get('phase')=='waiting':self.login={'phase':'error','error':'Google sign-in timed out. Select Connect again.'}
             threading.Thread(target=listen,daemon=True).start();webbrowser.open('https://accounts.google.com/o/oauth2/v2/auth?'+urllib.parse.urlencode(query))
         return self.status()
     def _token(self,values):

@@ -26,6 +26,7 @@ window.Collections=(()=>{
  async function connectAccount(){if(connectionRequest)return;connectionRequest=true;connectionError='';pollError='';connection();try{await api('/api/connection/connect',{});checkedChats.clear();}catch(error){connectionError=error.message||String(error);}finally{connectionRequest=false;connection();await poll();}}
  const button=(label,icon,fn,cls='icon')=>{const b=el('button',cls);b.type='button';b.title=label;b.setAttribute('aria-label',label);ViewerIcons.set(b,icon);b.onclick=safeRun(fn);return b;};
  const pending=()=>state.jobs.filter(j=>!['confirmed','cancelled'].includes(j.state));
+ const runnable=()=>pending().filter(j=>!j.local_choice);
  const active=()=>pending().some(j=>['preparing','waiting','running','retrying'].includes(j.state));
  function place(panel){const side=$('sidebar').getBoundingClientRect();panel.style.left=Math.max(8,Math.min(side.right+10,innerWidth-panel.offsetWidth-8))+'px';}
  function renderTrash(){
@@ -58,10 +59,51 @@ window.Collections=(()=>{
   if(!nodes.length)nodes.push(el('p','muted','No bookmarks match. Bookmark a chat to keep it here.'));SidebarOrder.reconcile($('bookmarks-list'),nodes);
  }
  function showBookmarks(){const p=$('bookmarks-panel');p.hidden=false;place(p);updateBookmarks();$('bookmarks-filter').focus();}
- async function stage(ids){if(!ids.length)return;const dialog=$('delete-choice');const local=ids.every(id=>String(S.chatById.get(id)?.path||'').endsWith('.jsonl'));const library=document.querySelector('[name=delete-retention][value=library]'),preserve=document.querySelector('[name=delete-retention][value=preserve]');library.closest('label').hidden=false;library.checked=true;preserve.checked=false;$('delete-choice-warning').textContent=local?'Remove these Codex sessions after Codex closes. Choose whether to keep a readable local copy below.':'Deleting in ChatGPT is permanent. Native Codex sessions are removed locally after Codex closes. Adding to this queue does not run it.';dialog.dataset.ids=JSON.stringify(ids);$('delete-choice-count').textContent=ids.length+' conversation'+(ids.length===1?'':'s');dialog.showModal();}
- async function add(){if(adding)return;adding=true;$('delete-choice-add').disabled=true;try{state=await api('/api/delete-queue/add',{ids:JSON.parse($('delete-choice').dataset.ids),mode:document.querySelector('[name=delete-retention]:checked').value});$('delete-choice').close();selected.clear();renderTrash();await showQueue();}finally{adding=false;$('delete-choice-add').disabled=false;}}
+ const nativeCodex=id=>{const c=S.chatById.get(id);return c?.kind==='codex'&&/\.jsonl$/i.test(c.path||'');};
+ let choiceKind='unknown';
+ const choiceCopy={
+  native:{heading:'Delete native Codex session?',warning:'Native Codex session: original file deletion runs locally, without ChatGPT.',delete:'Delete original Codex session and remove it from the viewer',deleteDetail:'Runs in the background after Codex closes. The original JSONL disappears from its session folder.',preserve:'Keep the original Codex session file; remove it from this viewer',preserveDetail:'Exclude the session from discovery without touching its original file.',notes:'Neither option contacts ChatGPT. The original JSONL file is removed only with the first option.'},
+  linked:{heading:'Delete ChatGPT-linked conversation?',warning:'Remote deletion is sent only after checking the connected ChatGPT account and saved conversation.',delete:'Delete on ChatGPT and delete the saved local copy',deleteDetail:'ChatGPT must confirm deletion before the original exclusive local source and unshared attachments are removed.',preserve:'Delete on ChatGPT but preserve the original local copy',preserveDetail:'After ChatGPT confirms deletion, keep the saved source file on disk and remove the chat from this viewer index.',notes:'Both options delete the ChatGPT chat. The first also removes its exclusive local original; the second keeps that file.'},
+  orphan:{heading:'Delete local-only conversation?',warning:'No verified ChatGPT account or original online link is associated with this saved chat.',delete:'Delete this local-only source file and its viewer index',deleteDetail:'Remove the original file only if it contains this conversation alone. Other files remain untouched.',preserve:'Keep the original local file; remove it from the viewer',preserveDetail:'Leave the source file in its folder and exclude the conversation from rescanning.',notes:'No ChatGPT request is made for either choice.'},
+  temporary:{heading:'Delete saved temporary chat?',warning:'This chat is marked temporary in the original ChatGPT export. It is handled locally; ChatGPT deletion is not required.',delete:'Delete saved temporary chat file and remove it from the viewer',deleteDetail:'Remove the exclusive local original and its viewer index; prevent rediscovery.',preserve:'Keep temporary chat file; remove it from the viewer',preserveDetail:'Keep the original file in its folder, remove its index entry and prevent rediscovery.',notes:'Neither option contacts ChatGPT. Temporary chat status overrides any inferred ChatGPT URL.'},
+  unknown:{heading:'Unverified conversation source',warning:'The viewer cannot establish an original ChatGPT account or prove this is an orphan. Remote and physical deletion are disabled.',delete:'Deletion unavailable until source is identified',deleteDetail:'No file or remote chat will be deleted on an inferred URL.',preserve:'Keep original source; remove it from the viewer only',preserveDetail:'Exclude this chat from the viewer index without changing the source file or ChatGPT.',notes:'Viewer URLs can be generated from chat IDs; they do not establish ChatGPT ownership.'}
+ };
+ function refreshChoice(){
+  const spec=choiceCopy[choiceKind],mode=document.querySelector('[name=delete-retention]:checked')?.value||'library';
+  $('delete-choice-add').textContent=mode==='library'?(choiceKind==='linked'?'Queue ChatGPT + local deletion':'Queue local deletion'):choiceKind==='linked'?'Queue ChatGPT deletion · keep local file':'Remove from viewer only';
+  $('delete-choice-warning').textContent=mode==='preserve'?(choiceKind==='linked'?'ChatGPT deletion is still required and cannot be undone. The original local file will be retained.':'Keep the original source file. Remove only this viewer entry; no ChatGPT deletion is requested.'):spec.warning;
+  $('delete-choice-notes').textContent=spec.notes;
+ }
+ async function stage(ids){
+  if(!ids.length)return;
+  const response=await api('/api/delete-choice/inspect',{ids});
+  const kinds=[...new Set(response.choices.map(c=>c.kind))];
+  if(kinds.length!==1){toast('Select one chat source type at a time: Codex, ChatGPT-linked, temporary or local-only.');return;}
+  choiceKind=kinds[0];const spec=choiceCopy[choiceKind],dialog=$('delete-choice');
+  const library=document.querySelector('[name=delete-retention][value=library]'),preserve=document.querySelector('[name=delete-retention][value=preserve]');
+  library.closest('label').querySelector('span').firstChild.textContent=spec.delete;
+  library.closest('label').querySelector('small').textContent=spec.deleteDetail;
+  preserve.closest('label').querySelector('span').firstChild.textContent=spec.preserve;
+  preserve.closest('label').querySelector('small').textContent=spec.preserveDetail;
+  library.disabled=choiceKind==='unknown';preserve.checked=choiceKind==='unknown';library.checked=choiceKind!=='unknown';
+  $('delete-choice-title').textContent=spec.heading;
+  $('delete-choice-warning').textContent=spec.warning;
+  $('delete-choice-count').textContent=ids.length+' conversation'+(ids.length===1?'':'s');
+  dialog.dataset.ids=JSON.stringify(ids);refreshChoice();dialog.showModal();
+ }
+ async function add(){
+  if(adding)return;adding=true;$('delete-choice-add').disabled=true;
+  try{
+   const ids=JSON.parse($('delete-choice').dataset.ids);
+   const mode=document.querySelector('[name=delete-retention]:checked').value==='library'?'delete':'preserve';
+   const response=await api('/api/delete-choice/submit',{ids,mode});
+   $('delete-choice').close();selected.clear();renderTrash();
+   toast(choiceKind==='linked'?(mode==='preserve'?'Queued ChatGPT deletion; original local file will be kept.':'Queued ChatGPT deletion and subsequent local removal.'):mode==='preserve'?'Keeping original file; removing only from viewer.':'Queued local deletion without ChatGPT.');
+   await showQueue();
+  }finally{adding=false;$('delete-choice-add').disabled=false;}
+ }
  function renderQueue(){
-  const jobs=state.jobs.filter(j=>j.state!=='cancelled'),waiting=pending(),doing=active(),dialog=$('delete-queue-dialog'),list=$('delete-queue-list'),nodes=[];
+  const jobs=state.jobs.filter(j=>j.state!=='cancelled'),waiting=pending(),remoteJobs=runnable(),doing=active(),dialog=$('delete-queue-dialog'),list=$('delete-queue-list'),nodes=[];
   $('delete-queue-open').hidden=!waiting.length;$('delete-queue-open').textContent=doing?'Deleting · '+jobs.filter(j=>j.state==='confirmed').length+'/'+jobs.length:'Queue delete · '+waiting.length;
   const cooling=jobs.find(j=>j.until>Date.now()/1000),deferred=jobs.some(j=>j.state==='waiting'&&j.local);
   $('delete-queue-title').textContent=cooling?'Waiting':doing?(deferred?'Waiting for Codex to close':'Running'):waiting.length?'Review deletion queue':jobs.length?'Done':'Deletion queue';
@@ -70,28 +112,32 @@ window.Collections=(()=>{
   $('delete-queue-count').textContent=jobs.filter(j=>j.state==='confirmed').length+' / '+jobs.length;
   const complete=jobs.filter(j=>j.state==='confirmed').length,progress=$('delete-queue-progress');progress.max=Math.max(jobs.length,1);progress.value=complete;const fill=$('delete-queue-fill');if(fill)fill.style.width=100*complete/Math.max(jobs.length,1)+'%';
   const native=state.native_connection||{},phase=native.phase||'disconnected';
-  $('delete-queue-connection').textContent=native.connected===true?'Connected to ChatGPT':phase==='starting'?'Starting ChatGPT…':native.alive===true&&phase==='sign-in'?'Sign in to ChatGPT to continue.':phase==='blocked'||phase==='error'?native.error||'ChatGPT connection unavailable. Use Connect to try again.':'Connect to ChatGPT to run remote deletions. Local Codex jobs wait for Codex to close.';
+  const needsRemote=remoteJobs.some(j=>!j.local);
+  $('delete-queue-connection').textContent=!needsRemote?'Local work only · ChatGPT connection not required':native.connected===true?'Connected to ChatGPT':phase==='starting'?'Starting ChatGPT…':native.alive===true&&phase==='sign-in'?'Sign in to ChatGPT to continue.':phase==='blocked'||phase==='error'?native.error||'ChatGPT connection unavailable. Use Connect to try again.':'Connect to ChatGPT to run linked remote deletions.';
+  $('delete-queue-notes').textContent=needsRemote?'ChatGPT-linked jobs require authenticated confirmation before removing local files. Native Codex and local-only operations run independently.':'Original files are retained only for Keep local source. Native Codex deletion waits for Codex to close. No remote ChatGPT deletion is required.';
   dialog.querySelector('.delete-warning').hidden=!waiting.some(job=>!job.local);connection();
   for(const job of jobs){const previous=queueStates.get(job.id);queueStates.set(job.id,job.state);
    if(job.state==='confirmed'){
-    if(previous&&previous!=='confirmed'){completedUntil.set(job.id,Date.now()+1400);setTimeout(renderQueue,1450);}
+    if(previous&&previous!=='confirmed'||job.local_choice&&previous===undefined){completedUntil.set(job.id,Date.now()+1400);setTimeout(renderQueue,1450);}
     if(!completedUntil.has(job.id))continue;
     if(Date.now()>=completedUntil.get(job.id)){const old=queueRows.get(job.id);if(old&&!old.dataset.leaving){old.dataset.leaving='true';old.inert=true;const height=old.getBoundingClientRect().height;const motion=matchMedia('(prefers-reduced-motion: reduce)').matches;old.animate([{opacity:.7,height:height+'px'},{opacity:0,height:'0px',minHeight:0,paddingTop:0,paddingBottom:0}],{duration:motion?0:380,easing:'cubic-bezier(.22,1,.36,1)',fill:'forwards'}).finished.then(()=>{old.remove();queueRows.delete(job.id);completedUntil.delete(job.id);}).catch(()=>{});}if(old)nodes.push(old);continue;}
    }
-   let row=queueRows.get(job.id);if(!row){row=el('div','delete-job');row.dataset.id=job.id;row.append(el('span','delete-job-state'),el('div','delete-job-title'),button('Remove queued deletion','close',async()=>{state=await api('/api/delete-queue/action',{action:'remove',ids:[job.id]});renderQueue();}));queueRows.set(job.id,row);}row.className='delete-job '+job.state;if(row.dataset.state!==job.state){row.dataset.state=job.state;row.children[0].replaceChildren();if(job.state==='confirmed')row.children[0].append(ViewerIcons.svg('check'));else row.children[0].textContent=({queued:'Queued',preparing:'Backing up',waiting:'Waiting',running:'Running',retrying:'Cooldown',paused:'Paused',failed:'Attention'})[job.state]||job.state;}
-   if(!row.children[1].children.length)row.children[1].append(el('strong'),el('small','muted'));const detail=job.error||job.message||(job.mode==='library'?(job.state==='confirmed'?'Local copy removed · private recovery kept':'Delete local copy and unshared attachments'):job.local?'Local Codex · preserve local copy':job.remote_state==='unavailable'?'Unavailable on ChatGPT · local copy kept':'Preserve local copy');row.children[1].children[0].textContent=job.title;row.children[1].children[1].textContent=detail;
-   row.children[2].hidden=!['queued','paused','failed'].includes(job.state);nodes.push(row);
+   let row=queueRows.get(job.id);if(!row){row=el('div','delete-job');row.dataset.id=job.id;row.append(el('span','delete-job-state'),el('div','delete-job-title'),button('Remove queued deletion','close',async()=>{state=await api('/api/delete-queue/action',{action:'remove',ids:[job.id]});renderQueue();}));queueRows.set(job.id,row);}row.className='delete-job '+job.state;if(row.dataset.state!==job.state){row.dataset.state=job.state;row.children[0].replaceChildren();if(job.state==='confirmed')row.children[0].append(ViewerIcons.svg('check'));else row.children[0].textContent=job.state==='preparing'?'Preparing deletion':job.state==='waiting'?(job.local?'Waiting for Codex':'Waiting for ChatGPT'):job.state==='running'?(job.local?'Removing locally':'Deleting on ChatGPT'):({queued:'Queued',retrying:'Checking result',paused:'Paused',failed:'Attention'})[job.state]||job.state;}
+   if(!row.children[1].children.length)row.children[1].append(el('strong'),el('small','muted'));
+   const detail=job.error||(job.local_choice?(job.mode==='preserve'?'Keep original file; remove only from viewer index':'Delete exclusive local-only source and index'):job.local?(job.mode==='library'?'Remove original Codex session and index':'Keep readable local Codex recovery in Trash'):job.mode==='library'?'Delete on ChatGPT, then remove exclusive local sources':'Delete on ChatGPT; keep original local source and hide viewer entry after confirmation');
+   row.children[1].children[0].textContent=job.title;row.children[1].children[1].textContent=detail;
+   row.children[2].hidden=job.local_choice||!['queued','paused','failed'].includes(job.state);nodes.push(row);
   }
   if(!nodes.length)nodes.push(el('p','muted',jobs.length&&!waiting.length?'All deletions finished.':'The deletion queue is empty. Select chats in Trash to add them.'));SidebarOrder.reconcile(list,nodes);
   const current=jobs.find(j=>['preparing','running','retrying','waiting'].includes(j.state))||jobs.filter(j=>j.state==='confirmed'&&completedUntil.has(j.id)).at(-1);
   const scrollKey=current?current.id+':'+current.state:'';
   if(scrollKey&&scrollKey!==lastActive&&dialog.open){const row=queueRows.get(current.id);requestAnimationFrame(()=>{if(!dialog.open||!row?.isConnected)return;const target=row.getBoundingClientRect().top-list.getBoundingClientRect().top+list.scrollTop-(list.clientHeight-row.offsetHeight)/2;list.scrollTo({top:Math.max(0,target),behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});});lastActive=scrollKey;}
-  $('delete-queue-run').hidden=doing||!waiting.length;$('delete-queue-pause').hidden=!waiting.length;$('delete-queue-stop').hidden=!waiting.length;$('delete-queue-run').disabled=doing||!waiting.length;$('delete-queue-run').textContent='Run '+waiting.length+' deletion'+(waiting.length===1?'':'s');$('delete-queue-pause').disabled=!doing;$('delete-queue-stop').disabled=!doing;
+  $('delete-queue-run').hidden=doing||!remoteJobs.length;$('delete-queue-pause').hidden=!remoteJobs.length;$('delete-queue-stop').hidden=!remoteJobs.length;$('delete-queue-run').disabled=doing||!remoteJobs.length;$('delete-queue-run').textContent='Run '+remoteJobs.length+' deletion'+(remoteJobs.length===1?'':'s');$('delete-queue-pause').disabled=!doing;$('delete-queue-stop').disabled=!doing;
   updateBookmarks();
  }
  async function poll(){if(polling)return;polling=true;try{state=await api('/api/delete-queue');removeCatalog(state.removed);pollError='';renderQueue();renderTrash();}catch(e){pollError=e.message||String(e);$('delete-queue-connection').textContent='Could not refresh deletion queue · '+pollError;connection();}finally{polling=false;clearTimeout(pollTimer);pollTimer=setTimeout(poll,document.hidden?30000:active()||$('delete-queue-dialog').open||state.native_connection?.alive&&!state.native_connection?.connected?1500:15000);}}
  async function showQueue(){lastActive='';const d=$('delete-queue-dialog');if(!d.open)d.showModal();await poll();}
- async function queueAction(action){const b=$('delete-queue-'+(action==='run'?'run':action));b.disabled=true;try{state=await api('/api/delete-queue/action',{action,ids:pending().map(j=>j.id)});renderQueue();}finally{await poll();}}
+ async function queueAction(action){const b=$('delete-queue-'+(action==='run'?'run':action));b.disabled=true;try{state=await api('/api/delete-queue/action',{action,ids:runnable().map(j=>j.id)});renderQueue();}finally{await poll();}}
  async function discover(){const b=$('native-discover');b.disabled=true;try{await api('/api/codex/discover',{});for(;;){const value=await api('/api/codex/status');$('native-status').textContent=(value.running?'Discovering native sessions… ':'Native Codex: ')+value.found+' available'+(value.errors.length?' · '+value.errors.join('; '):'');if(!value.running)break;await new Promise(r=>setTimeout(r,1500));}}finally{b.disabled=false;}}
  function init(){
   const bridgeStatus=el('span','connection-state');bridgeStatus.id='connection-state';bridgeStatus.setAttribute('role','status');bridgeStatus.append(el('span','connection-dot'),document.createTextNode('Disconnected'));const connect=el('button','','Connect');connect.id='connection-connect';connect.onclick=safeRun(connectAccount);const group=el('span','connection-group');group.append(bridgeStatus,connect);$('message-stat').after(group);const remote=el('span','remote-chat-state');remote.id='remote-chat-state';remote.hidden=true;$('catalog-message-count').after(remote);
@@ -107,6 +153,7 @@ window.Collections=(()=>{
   const nav=el('button','nav-action trash-nav');nav.id='bookmarks-open';nav.append(ViewerIcons.svg('bookmark'),document.createTextNode('Bookmarks'),el('small'));nav.onclick=showBookmarks;$('trash-open').before(nav);
   const queueNav=el('button','delete-primary');queueNav.id='delete-queue-open';queueNav.hidden=true;queueNav.onclick=safeRun(showQueue);$('trash-open').after(queueNav);
   const toolbar=document.querySelector('.header-right');toolbar.insertBefore(button('Open Bookmarks','bookmark',showBookmarks),$('chat-menu'));toolbar.insertBefore(button('Open Trash','trash',()=>ChatControls.showTrash()),$('chat-menu'));
+  document.querySelectorAll('[name=delete-retention]').forEach(input=>input.onchange=refreshChoice);
   $('delete-choice-add').onclick=safeRun(add);$('delete-queue-run').onclick=safeRun(()=>queueAction('run'));$('delete-queue-pause').onclick=safeRun(()=>queueAction('pause'));$('delete-queue-stop').onclick=safeRun(()=>queueAction('stop'));
   const deleteCurrent=el('button','delete-primary','Queue deletion of current chat');deleteCurrent.onclick=safeRun(()=>S.selected&&stage([S.selected.id]));deleteCurrent.replaceChildren(ViewerIcons.svg('trash'),document.createTextNode('Queue deletion of current chat'));trash.insertBefore(deleteCurrent,searchBox);
   const native=el('section','native-discovery'),nativeButton=el('button','','Detect native Codex chats');nativeButton.id='native-discover';nativeButton.onclick=safeRun(discover);const status=el('p','muted');status.id='native-status';status.setAttribute('role','status');status.textContent='Uses CODEX_HOME or your Windows profile .codex folder. Session bodies load when opened.';const nativeToggle=el('label','check'),nativeCheck=el('input');nativeCheck.type='checkbox';nativeCheck.id='native-startup';nativeCheck.checked=S.settings.nativeCodexEnabled!==false;nativeCheck.onchange=safeRun(()=>saveSetting('nativeCodexEnabled',nativeCheck.checked));nativeToggle.append(nativeCheck,document.createTextNode('Discover native Codex at startup'));native.append(nativeButton,nativeToggle,status);$('folder-dialog').append(native);
