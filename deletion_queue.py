@@ -36,14 +36,26 @@ class DeletionQueue:
             if root in roots and metadata.get('deletion_verified') and metadata.get('remote_deleted_at'):
                 stamp=metadata['remote_deleted_at'];stamp=stamp/1000 if isinstance(stamp,(float,int)) and stamp>1e11 else stamp
                 record(archive,root,item['cid'],roots[root],'deleted','verified exporter index',checked=stamp if isinstance(stamp,(float,int)) else None)
-    def chat_account(self,cid):
+    def account_origins(self,cid):
         if not isinstance(cid,str) or not re.fullmatch(r'[a-zA-Z0-9_-]{8,160}',cid):raise ValueError('Choose a saved ChatGPT conversation')
         roots=self.roots()
         with self.archive.connect() as db:
             options={Path(r[0]).parent.resolve() for r in db.execute('SELECT manifest FROM manifest_entries WHERE cid=?',(cid,))}&roots.keys()
-        if len(options)==1:
-            root=options.pop();return root,roots[root]
-        if len(options)>1:raise ValueError('This chat belongs to several accounts. Choose its original export before deleting.')
+        return [dict(root=str(root),scope=roots[root]) for root in sorted(options)]
+    def chat_account(self,cid,selected_root=None):
+        candidates=self.account_origins(cid)
+        roots={item['root']:item['scope'] for item in candidates}
+        if selected_root is not None:
+            if not isinstance(selected_root,str) or selected_root not in roots:
+                raise ValueError('The selected original export is not a saved source for this conversation. Review its sources again.')
+            return Path(selected_root),roots[selected_root]
+        if len(set(roots.values()))>1:
+            raise ValueError('This chat appears in exports with different account scopes. Choose the original export in the deletion dialog.')
+        if roots:
+            with self.archive.connect() as db:source=db.execute('SELECT path FROM chats WHERE id=?',(cid,)).fetchone()
+            primary=Path(source['path']).resolve() if source else None
+            selected=next((r for r in roots if primary and primary.is_relative_to(Path(r))),next(iter(roots)))
+            return Path(selected),roots[selected]
         with self.archive.connect() as db:
             source=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? LIMIT 1',(cid,cid)).fetchone()
         if not source:raise ValueError('Conversation was not found')
@@ -91,17 +103,18 @@ class DeletionQueue:
                 if scope:result[root]=str(scope)
             except (ValueError,OSError):continue
         return result
-    def enqueue(self,ids,mode='library'):
+    def enqueue(self,ids,mode='library',origins=None):
         if mode not in ('library','preserve'):raise ValueError('Choose Library cleanup or preserve local copy')
         if not isinstance(ids,list) or not ids or len(ids)>1000:raise ValueError('Select between 1 and 1000 chats')
-        roots=self.roots();catalog={c['id']:c for c in self.archive.catalog()};prepared=[]
+        if origins is None:origins={}
+        if not isinstance(origins,dict) or any(k not in ids for k in origins):raise ValueError('Invalid original export selection')
+        catalog={c['id']:c for c in self.archive.catalog()};prepared=[]
         with self.archive.connect() as db:
             for cid in dict.fromkeys(ids):
                 c=catalog.get(cid)
                 if not c:raise ValueError('Conversation was not found')
                 if Path(c['path']).suffix.lower()=='.jsonl' or c['kind']=='codex' and not c.get('url'):raise ValueError('Native Codex sessions support local Trash, not ChatGPT remote deletion')
-                options={Path(r[0]).parent.resolve() for r in db.execute('SELECT manifest FROM manifest_entries WHERE cid=?',(cid,))}&roots.keys()
-                root,scope=self.chat_account(cid);prepared.append((cid,c,root,scope))
+                root,scope=self.chat_account(cid,origins.get(cid));prepared.append((cid,c,root,scope))
         with self.lock,self.archive.connect() as db:
             for cid,c,root,scope in prepared:
                 old=db.execute('SELECT state,mode,receipt FROM deletion_jobs WHERE scope=? AND cid=?',(scope,cid)).fetchone()
@@ -146,8 +159,16 @@ class DeletionQueue:
                         db.execute("UPDATE deletion_jobs SET scope=? WHERE scope='unbound'",(next(iter(scopes)),))
                 with self.archive.connect() as db:
                     for row in rows:
-                        if json.loads(row['receipt'] or '{}').get('verified'):continue
-                        db.execute("UPDATE browser_requests SET phase='preflight',attempts=0 WHERE job=? AND phase='done'",(row['id'],))
+                        proof=json.loads(row['receipt'] or '{}')
+                        if proof.get('verified') and proof.get('state')=='confirmed' and proof.get('remote_state','deleted')=='deleted':
+                            continue
+                        # Old Viewers sometimes confirmed one 404 as
+                        # 'unavailable'. This is NOT proof that remote deletion
+                        # was completed. A new run must do both GET checks.
+                        if proof.get('remote_state')=='unavailable':
+                            db.execute("UPDATE deletion_jobs SET receipt='' WHERE id=?",(row['id'],))
+                        db.execute("UPDATE browser_requests SET phase='preflight',attempts=0,lease='',owner='',expires=0,next_at=0 WHERE job=? AND (phase='done' OR phase='absence-confirm')",(row['id'],))
+                        db.execute('DELETE FROM browser_absence WHERE job=?',(row['id'],))
                 with self.archive.connect() as db:db.execute("UPDATE deletion_jobs SET state='preparing',run=?,error='' WHERE state NOT IN ('confirmed','cancelled')",(run,))
                 self.control(False,run)
             elif action in ('pause','stop'):
@@ -173,20 +194,27 @@ class DeletionQueue:
         base=self.archive.data_dir/'deletion-recovery'/row['id'];base.mkdir(parents=True,exist_ok=True)
         text,origin=thread_markdown(self.archive,row['cid'])
         atomic_bytes(base/'conversation.md',text.encode())
-        with self.archive.connect() as db:source=db.execute('SELECT path FROM chats WHERE id=? UNION ALL SELECT path FROM manifest_entries WHERE cid=? LIMIT 1',(row['cid'],row['cid'])).fetchone()
+        selected_root=Path(row['root']).resolve()
+        with self.archive.connect() as db:
+            source_paths=[Path(r['path']) for r in db.execute('SELECT path FROM manifest_entries WHERE cid=?',(row['cid'],))]
+            primary=db.execute('SELECT path FROM chats WHERE id=?',(row['cid'],)).fetchone()
+            if primary:source_paths.append(Path(primary['path']))
+        source=next((p for p in source_paths if p.is_file() and p.resolve().is_relative_to(selected_root)),None)
         if source:
-            path=Path(source['path']);before=path.stat();shutil.copy2(path,base/('source'+path.suffix))
+            path=source;before=path.stat();shutil.copy2(path,base/('source'+path.suffix))
             if (before.st_size,before.st_mtime_ns)!=(path.stat().st_size,path.stat().st_mtime_ns):raise ValueError('Chat changed during backup; retry after the current export finishes')
         sources=[];paths={}
         with self.archive.connect() as db:
             for item in db.execute('SELECT manifest,metadata,path FROM manifest_entries WHERE cid=?',(row['cid'],)):
-                root=Path(item['manifest']).parent.resolve();metadata=json.loads(item['metadata'])
+                root=Path(item['manifest']).parent.resolve()
+                if root!=selected_root:continue
+                metadata=json.loads(item['metadata'])
                 for key in ('json','markdown'):
                     value=metadata.get(key)
                     if isinstance(value,str) and value:
                         target=(root/value).resolve()
                         if target.is_relative_to(root):paths[target]=root
-            if source:paths.setdefault(Path(source['path']).resolve(),Path(row['root']).resolve())
+            if source:paths.setdefault(source.resolve(),selected_root)
             shared={r[0] for r in db.execute('SELECT path FROM chats WHERE id!=? UNION SELECT path FROM manifest_entries WHERE cid!=?',(row['cid'],row['cid']))}
         for path,root in paths.items():
             if not path.is_file() or path.is_symlink():continue
@@ -200,7 +228,7 @@ class DeletionQueue:
             if digest(path)!=sha or (before.st_size,before.st_mtime_ns)!=(path.stat().st_size,path.stat().st_mtime_ns):raise ValueError('Conversation changed during backup')
             sources.append(dict(path=str(path),copy=str(target),sha256=sha,root=str(root),exclusive=exclusive))
         self.files.refresh();saved=[]
-        with self.files.lock:items=[dict(f) for f in self.files.entries.values() if row['cid'] in f['conversations'] and not f['historical']]
+        with self.files.lock:items=[dict(f) for f in self.files.entries.values() if row['cid'] in f['conversations'] and not f['historical'] and Path(f['root']).resolve()==selected_root]
         for f in items:
             path=self.files.available_path(f)
             if not path:continue
@@ -208,19 +236,29 @@ class DeletionQueue:
             before=path.stat();shutil.copy2(path,target);sha=digest(target)
             if digest(path)!=sha or (before.st_size,before.st_mtime_ns)!=(path.stat().st_size,path.stat().st_mtime_ns):raise ValueError('Attachment changed while backing up; no deletion command sent')
             saved.append(dict(path=str(path),copy=str(target),sha256=sha,conversations=f['conversations'],root=str(f['root']),size=before.st_size))
-        write(base/'index.json',dict(schema=SCHEMA,cid=row['cid'],scope=row['scope'],markdown_origin=origin,files=saved,sources=sources))
-    def previous_receipt(self,row):
-        # Receipts live with the export, so a fresh portable app can reuse proof
-        # from an older app database without repeating the remote operation.
-        proofs=[]
-        for path in (Path(row['root'])/'.viewer-queue/receipts').glob('*.json'):
+        write(base/'index.json',dict(schema=SCHEMA,cid=row['cid'],scope=row['scope'],root=str(selected_root),markdown_origin=origin,files=saved,sources=sources))
+    def indexed_receipts(self,root):
+        """Index a folder's verified deletion proofs in one pass, even for bulk queues."""
+        proofs={}
+        for path in (Path(root)/'.viewer-queue/receipts').glob('*.json'):
             if path.is_symlink():continue
             proof=read(path)
-            if (proof.get('schema')==SCHEMA and proof.get('cid')==row['cid']
-                and proof.get('scope')==row['scope'] and proof.get('verified') is True
-                and proof.get('state')=='confirmed' and proof.get('remote_state','deleted')=='deleted'):
-                proofs.append(proof)
-        return max(proofs,key=lambda p:p.get('updated',0),default={})
+            if (proof.get('schema')!=SCHEMA or not proof.get('cid') or not proof.get('scope')
+                or proof.get('verified') is not True or proof.get('state')!='confirmed'
+                or proof.get('remote_state','deleted')!='deleted'):continue
+            key=(proof['scope'],proof['cid'])
+            if key not in proofs or proof.get('updated',0)>proofs[key].get('updated',0):proofs[key]=proof
+        return proofs
+    def previous_receipt(self,row):
+        # A fresh portable app can reuse proof from an older app database.
+        return self.indexed_receipts(row['root']).get((row['scope'],row['cid']),{})
+    def has_verified_local_cleanup_proof(self,row,proofs=None):
+        """Already-confirmed remote deletes can finish locally without reconnecting."""
+        if row['mode']!='library':return False
+        proof=json.loads(row.get('receipt') or '{}')
+        if proof.get('verified') is True and proof.get('state')=='confirmed' and proof.get('remote_state','deleted')=='deleted':
+            return True
+        return bool(proofs.get((row['scope'],row['cid']))) if proofs is not None else bool(self.previous_receipt(row))
     def tick(self):
         self.collect_checks()
         rows=self.rows();prepared=[]
@@ -235,13 +273,16 @@ class DeletionQueue:
                         if not (base/'index.json').is_file():self.snapshot(row)
                         previous=dict(proof,id=row['id'],run=row['run'],imported_from=proof['id'])
                         with self.archive.connect() as db:db.execute('UPDATE deletion_jobs SET receipt=? WHERE id=?',(json.dumps(previous),row['id']))
-                if previous.get('verified') is True and previous.get('state')=='confirmed':
+                if (previous.get('verified') is True and previous.get('state')=='confirmed'
+                    and previous.get('remote_state','deleted')=='deleted'):
                     if row['mode']=='library':
-                        if previous.get('remote_state','deleted')!='deleted':
-                            raise ValueError('ChatGPT did not confirm remote deletion; original local copy remains')
                         self.cleanup(row)
                     with self.archive.connect() as db:db.execute("UPDATE deletion_jobs SET state='confirmed',error='' WHERE id=?",(row['id'],))
                     continue
+                if previous.get('remote_state')=='unavailable':
+                    # Old single-404 receipts may be cached from before the
+                    # two-check rule. Never recycle them as deletion proof.
+                    with self.archive.connect() as db:db.execute("UPDATE deletion_jobs SET receipt='' WHERE id=?",(row['id'],))
                 self.snapshot(row)
                 command={k:row[k] for k in ('id','cid','scope','mode','run','title')};command.update(schema=SCHEMA,created=row['created'])
                 with self.archive.connect() as db:
@@ -303,7 +344,7 @@ class DeletionQueue:
                 target=Path(row['root'])/'.viewer-queue/history'/row['run']/(row['id']+'.json');target.parent.mkdir(parents=True,exist_ok=True);os.replace(source,target)
     def cleanup(self,row):
         base=self.archive.data_dir/'deletion-recovery'/row['id'];index=read(base/'index.json')
-        if index.get('cid')!=row['cid'] or index.get('scope')!=row['scope']:raise ValueError('The recovery manifest does not match this chat/account')
+        if index.get('cid')!=row['cid'] or index.get('scope')!=row['scope'] or index.get('root',row['root'])!=row['root']:raise ValueError('The recovery manifest does not match this chat/account')
         sources=index.get('sources')
         if sources is None:
             # Upgrade old receipts without inventing a backup or overwriting it.
@@ -319,8 +360,9 @@ class DeletionQueue:
                 sources=[dict(path=str(path),copy=str(copy),sha256=digest(copy),root=row['root'],exclusive=not shared)]
         self.files.refresh()
         with self.files.lock:current=[dict(f) for f in self.files.entries.values()]
-        candidates=[f for f in sources if f.get('exclusive')]
+        candidates=[f for f in sources if f.get('exclusive') and Path(f['root']).resolve()==Path(row['root']).resolve()]
         for f in index.get('files',[]):
+            if Path(f['root']).resolve()!=Path(row['root']).resolve():continue
             path=Path(f['path']);uses={cid for item in current if item['target']==path for cid in item['conversations']}
             if not uses-{row['cid']}:candidates.append(f)
         # Validate everything before moving anything; shared files stay untouched.
@@ -342,11 +384,18 @@ class DeletionQueue:
         self.files.refresh()
     def status(self):
         rows=self.rows();bridges=[]
+        # Scan each export's receipt folder at most once per status request.
+        # An O(jobs × receipts) scan stalled earlier bulk queues.
+        proof_indexes={root:self.indexed_receipts(root) for root in {
+            row['root'] for row in rows if row['mode']=='library' and row['state'] not in ('confirmed','cancelled')
+            and not (json.loads(row['receipt'] or '{}').get('verified') is True
+                     and json.loads(row['receipt'] or '{}').get('remote_state','deleted')=='deleted')}}
         for root,scope in self.roots().items():
             bridge=read(root/'.viewer-queue/bridge.json')
             reset=read(root/'.viewer-queue/reconnect.json');connection=bridge.get('connection',{}) if bridge.get('scope')==scope else {}
             bridges.append(dict(root=str(root),scope=scope,connected=bridge.get('connected') is True and bridge.get('scope')==scope and time.time()-bridge.get('updated',0)<45,version=bridge.get('version',''),error=bridge.get('error',''),connection=connection,reconnecting=bool(reset.get('nonce') and connection.get('nonce')!=reset['nonce'] and time.time()-reset.get('updated',0)<90),fresh=time.time()-bridge.get('updated',0)<45))
-        jobs=[dict({k:v for k,v in r.items() if k!='receipt'},remote_state=json.loads(r['receipt'] or '{}').get('remote_state',''),until=json.loads(r['receipt'] or '{}').get('until',0),message=json.loads(r['receipt'] or '{}').get('message','')) for r in rows]
+        jobs=[dict({k:v for k,v in r.items() if k!='receipt'},remote_state=json.loads(r['receipt'] or '{}').get('remote_state',''),until=json.loads(r['receipt'] or '{}').get('until',0),message=json.loads(r['receipt'] or '{}').get('message',''),
+                   proof_ready=self.has_verified_local_cleanup_proof(r,proof_indexes.get(r['root'],{})) if r['state'] not in ('confirmed','cancelled') else False) for r in rows]
         bridges+=self.browser.statuses()
         return dict(jobs=jobs,bridges=bridges,companion_folder=str(Path(__file__).parent/'integration/browser-companion'),adapter_folder=self.archive.settings().get('exporterBridgeFolder',''))
     def close(self):

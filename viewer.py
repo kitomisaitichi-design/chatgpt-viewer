@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.29'
+VERSION = '1.1.30'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -1266,7 +1266,7 @@ class Server(ThreadingHTTPServer):
     def deletion_status(self):
         value=self.deletions.status();catalog=dict(self.archive.ui_cache['chats']) if self.archive.ui_cache else {c['id']:c for c in self.archive.catalog()}
         for row in self.native.deletion_queue.rows():
-            value['jobs'].append(dict(row,cid=row['session_id'],local=True,title=row.get('title') or catalog.get(row['session_id'],{}).get('alias') or catalog.get(row['session_id'],{}).get('title') or row['session_id'],message='Waiting until Codex is closed' if row['state']=='waiting' else '',remote_state='local-removed' if row['state']=='confirmed' else ''))
+            value['jobs'].append(dict(row,cid=row['session_id'],local=True,title=row.get('title') or catalog.get(row['session_id'],{}).get('alias') or catalog.get(row['session_id'],{}).get('title') or row['session_id'],message=(row.get('error') or 'Waiting for selected session file') if row['state']=='waiting' else '',remote_state='local-removed' if row['state']=='confirmed' else ''))
         for row in self.local_choice.rows():
             value['jobs'].append(dict(row,local=True,local_choice=True,
                 title=row['title'],created=row['updated'],message=(
@@ -1325,13 +1325,17 @@ class Server(ThreadingHTTPServer):
                                     break
                             except (ValueError,OSError,TypeError):continue
                     if temporary:kind='temporary'
-                    elif remote and remote['state']=='deleted':kind='orphan'
+                    elif remote and remote['state']=='deleted' and (not scoped or scoped=={remote['scope']}):kind='orphan'
                     elif scoped or remote and remote['state']=='available' or explicit:kind='linked'
                     elif cid.startswith('local-') and not manifests:kind='orphan'
                     else:kind='unknown'
-                result.append(dict(id=cid,kind=kind,title=c.get('alias') or c.get('title') or cid))
+                origins=self.deletions.account_origins(cid) if kind=='linked' else []
+                multiple_scopes=len({o['scope'] for o in origins})>1
+                result.append(dict(id=cid,kind=kind,title=c.get('alias') or c.get('title') or cid,
+                    origins=[dict(root=o['root'],label=Path(o['root']).name,scope_hint=hashlib.sha256(o['scope'].encode()).hexdigest()[:8],
+                                  displayed=path.resolve().is_relative_to(Path(o['root']))) for o in origins] if multiple_scopes else []))
         return dict(choices=result)
-    def deletion_submit(self,ids,mode):
+    def deletion_submit(self,ids,mode,origins=None):
         if mode not in ('delete','preserve'):raise ValueError('Choose delete or preserve local copy')
         choices=self.deletion_choices(ids)['choices']
         types={r['kind'] for r in choices}
@@ -1339,13 +1343,13 @@ class Server(ThreadingHTTPServer):
         category=next(iter(types))
         if mode=='delete':
             if category=='native':return self.remove_native_codex_locally(ids)
-            if category=='linked':return self.queue_add(ids,'library')
+            if category=='linked':return self.queue_add(ids,'library',origins)
             if category=='unknown':raise ValueError('ChatGPT ownership is unknown. Cannot safely delete this chat remotely or delete its only source.')
         if mode=='preserve' and category=='linked':
             # ChatGPT-linked preserve still deletes remotely. The original
             # saved source is retained, then hidden from the viewer after a
             # confirmed remote deletion receipt.
-            return self.queue_add(ids,'preserve')
+            return self.queue_add(ids,'preserve',origins)
         with self.queue_lock:
             # When preserving the local source, cancel any *not-started*
             # remote job for these IDs. In-flight ChatGPT requests are refused.
@@ -1400,13 +1404,13 @@ class Server(ThreadingHTTPServer):
                 # arbitrary filesystem paths. Validate source header + CODEX_HOME.
                 self.native.deletion_queue._validate_session(Path(c['path']),cid)
             return self.native.deletion_queue.run_selected_local(ids)
-    def queue_add(self,ids,mode):
+    def queue_add(self,ids,mode,origins=None):
         if not isinstance(ids,list) or not 0<len(ids)<=1000:raise ValueError('Select between 1 and 1000 chats')
         with self.queue_lock:
             catalog={c['id']:c for c in self.archive.catalog()}
             if any(cid not in catalog for cid in ids):raise ValueError('A selected conversation was not found')
             local=[cid for cid in ids if Path(catalog[cid]['path']).suffix.lower()=='.jsonl'];remote=[cid for cid in ids if cid not in local]
-            if remote:self.deletions.enqueue(remote,mode)
+            if remote:self.deletions.enqueue(remote,mode,origins)
             if local:self.native.deletion_queue.enqueue(local,mode)
             return self.deletion_status()
     def queue_action(self,action,ids):
@@ -1417,6 +1421,13 @@ class Server(ThreadingHTTPServer):
                 if any(r['state'] in ('preparing','waiting','running','retrying') or r.get('local') and r['run'] and r['state']=='queued' for r in pending):raise ValueError('The queue is already running')
             remote=[r['id'] for r in pending if not r.get('local')];local=[r['id'] for r in pending if r.get('local')]
             if action=='remove':remote=[i for i in ids or [] if i in remote];local=[i for i in ids or [] if i in local]
+            if action=='run' and remote:
+                connected=self.deletions.browser.connected_scopes()
+                remaining=[r for r in pending if not r.get('local') and not r.get('proof_ready')]
+                if remaining and not connected:
+                    raise ValueError('ChatGPT is not connected in this Viewer. Click Connect, sign in to the account from the selected export, then run the queue.')
+                if any(r['scope']!='unbound' and r['scope'] not in connected for r in remaining):
+                    raise ValueError('The connected ChatGPT account does not match the selected export. Connect its original account before running the queue.')
             if remote:self.deletions.action(action,remote)
             if local:self.native.deletion_queue.action(action,local)
             return self.deletion_status()
@@ -1694,10 +1705,10 @@ class Handler(BaseHTTPRequestHandler):
                 if os.name=='nt':os.startfile(str(folder))
                 self.send({'path':str(folder)});return
             elif self.path in ('/api/connection/connect','/api/connection/reconnect'):self.send(self.server.native_connection.connect());return
-            elif self.path=='/api/delete-queue/add':self.send(self.server.queue_add(d.get('ids'),d.get('mode','library')));return
+            elif self.path=='/api/delete-queue/add':self.send(self.server.queue_add(d.get('ids'),d.get('mode','library'),d.get('origins')));return
             elif self.path=='/api/delete-queue/action':self.send(self.server.queue_action(d.get('action'),d.get('ids')));return
             elif self.path=='/api/delete-choice/inspect':self.send(self.server.deletion_choices(d.get('ids')));return
-            elif self.path=='/api/delete-choice/submit':self.send(self.server.deletion_submit(d.get('ids'),d.get('mode')));return
+            elif self.path=='/api/delete-choice/submit':self.send(self.server.deletion_submit(d.get('ids'),d.get('mode'),d.get('origins')));return
             elif self.path=='/api/local-codex/remove':self.send(self.server.remove_native_codex_locally(d.get('ids')));return
             elif self.path=='/api/delete-queue/install-bridge':
                 import importlib.util
@@ -1738,8 +1749,41 @@ class Handler(BaseHTTPRequestHandler):
             self.send({'ok':True})
         except Exception as e:self.send({'error':str(e)},400)
 
+def claim_viewer_instance(data_dir):
+    """Keep one server and deletion owner per archive, even with random HTTP ports."""
+    folder=Path(data_dir).resolve();folder.mkdir(parents=True,exist_ok=True)
+    handle=(folder/'viewer-instance.lock').open('a+b')
+    try:
+        handle.seek(0,os.SEEK_END)
+        if handle.tell()==0:handle.write(b'\0');handle.flush()
+        handle.seek(0)
+        if os.name=='nt':
+            import msvcrt
+            msvcrt.locking(handle.fileno(),msvcrt.LK_NBLCK,1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+        return handle
+    except OSError:
+        handle.close()
+        return None
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--root',default=str(APP));parser.add_argument('--up',type=int,default=None);parser.add_argument('--port',type=int,default=0);parser.add_argument('--no-browser',action='store_true');parser.add_argument('--data-dir',default=str(APP/'.viewer-data'));parser.add_argument('--profile',default=None);parser.add_argument('--isolated',action='store_true');args=parser.parse_args()
+    owner=claim_viewer_instance(args.data_dir)
+    if owner is None:
+        print('This archive is already open in another Viewer process. Reusing the existing server.',flush=True)
+        if not args.no_browser:
+            try:
+                session=json.loads((Path(args.data_dir)/'session.json').read_text(encoding='utf-8'))
+                url=session.get('url','')
+                if re.fullmatch(r'http://127\.0\.0\.1:\d+/\?token=[\w-]+',url):webbrowser.open(url)
+            except (OSError,ValueError):pass
+        return
+    try:_run_viewer(args)
+    finally:owner.close()
+
+def _run_viewer(args):
     a=Archive(args.data_dir)
     if not args.isolated and (args.profile or args.data_dir==str(APP/'.viewer-data')):
         from preferences import attach,profile_path

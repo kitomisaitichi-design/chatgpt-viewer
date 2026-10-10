@@ -21,7 +21,7 @@ if hashlib.sha256((root/'runtime/native/NativeConnect.exe').read_bytes()).hexdig
 if hashlib.sha256((root/'integration/native-connection/NativeConnect.cs').read_bytes().replace(b'\r\n',b'\n')).hexdigest()!=helper['source_sha256']:raise ValueError('Native helper source changed without rebuilding')
 paths=sorted({p for p in paths if p and p!='.gitignore' and not p.startswith(('.github/','tests/','scripts/','release-notes/'))})
 name=f'Offline-Chat-Viewer-v{version}-Windows.zip';target=out/name
-for required in ['viewer.py','native_connection.py','runtime/native/NativeConnect.exe','thread_images.py','web/thread-images.js','web/document-cards.js','web/media.css','library_files.py','START-VIEWER.bat','runtime/python.exe','runtime/python313.zip','web/files.js','web/files.css']:
+for required in ['viewer.py','native_connection.py','runtime/native/NativeConnect.exe','thread_images.py','web/thread-images.js','web/document-cards.js','web/media.css','library_files.py','START-VIEWER.bat','runtime/python.exe','runtime/python313.zip','web/files.js','web/files.css','web/structured-content.js','web/structured-content.css','web/vendor/dagre.min.js','web/vendor/dagre-LICENSE.txt']:
  if required not in paths:raise ValueError('Missing portable file: '+required)
 with zipfile.ZipFile(target,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as z:
  for relative in paths:

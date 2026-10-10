@@ -16,7 +16,7 @@
 
 Read, search and organize saved **ChatGPT, ChatGPT Work and Codex** conversations in a familiar local interface. Explore branches, documents, images and media; keep your place; organize your archive; and back it up without sending your chats to a hosted reader.
 
-**Latest update — v1.1.29:** Open indexed `.jsonl`, `.json` and `.md` source links from messages, preview JSONL attachments as readable text, and use source-aware local deletion. Includes a verified fix for rejecting Library files whose SHA-256 does not match their saved metadata. [Read the v1.1.29 changes](release-notes/v1.1.29.md).
+**Latest update — v1.1.30:** Modern ChatGPT chart, graph and layout rendering; reliable deletion of older conversations already missing online; faster, clearer deletion queues; and native Codex file removal without closing unrelated Codex sessions. [Read the v1.1.30 changes](release-notes/v1.1.30.md).
 
 The Windows download includes **Python and offline rendering assets**. Standard reading needs no installer, subscription, API key, CDN or package setup. Optional online features remain under your control.
 
@@ -58,6 +58,7 @@ Keep `.viewer-data` when updating in place. Shared preferences live separately u
 - Distinguish **Chats**, **Work** and **Codex** using saved source evidence; apply explicit type corrections where needed.
 - Browse saved branches and message versions, model metadata, timestamps and source links.
 - Render Markdown, headings, lists, code with copying/highlighting, formulas, tables, citations and supported saved charts/widgets.
+- Recreate saved ChatGPT structured content: Mermaid-style flowcharts in all four directions, Chart data and series, grid/row/card layouts, compact metric labels, small captions, and grouped downloadable-document links. Expand graphs with Fit/zoom and charts in top-layer dialogs.
 - Preserve table link labels and source citations from supported structured OpenAI markup; open saved source URLs and inspect multi-source details.
 - Keep literal code examples intact rather than interpreting them as rich content.
 - Load messages in bounded pages, preserve reading positions and reuse recently opened conversation content.
@@ -145,10 +146,11 @@ Keep `.viewer-data` when updating in place. Shared preferences live separately u
 - **Connect** opens an app-owned native ChatGPT sign-in window using WebView2. A fresh authenticated response establishes Connected state; ordinary reading does not need this connection.
 - Reopen the same private session using Account/Sign in; keep login data outside exported backups and release packages.
 - Review the exact deletion set before running. Back up available source content first and compare the live conversation graph with saved JSON before deleting remotely.
-- Keep one queue owner, shared pacing and Retry-After cooldowns; verify uncertain mutations before retrying.
-- Label an already unavailable remote conversation truthfully and support receipt-based local cleanup without repeating remote deletion.
+- Keep one queue owner, separate short browser pacing from actual ChatGPT 429 throttles, expire stale countdowns, and verify uncertain mutations before retrying.
+- For an older conversation already absent from ChatGPT, require **two distinct authenticated absence checks** under the matching account before local cleanup; do not infer deletion from network errors, authentication failures or rate limiting, and skip redundant remote PATCH requests.
+- Reuse matching verified deletion receipts to finish local cleanup without reconnecting when no online action remains.
 - Remove only verified, owned and unshared local attachments; retain changed/shared files and expose actionable errors.
-- Queue native Codex session removal until Codex closes; preserve private recovery and prevent rediscovery through stable session exclusions. Referenced workspace files are not owned chat files.
+- Delete the selected native Codex JSONL locally **without waiting for unrelated Codex processes to close**. A file that is locked or changing is retried; the original is removed only after recovery verification, and stable session exclusions prevent rediscovery. Referenced workspace files are not owned chat files.
 
 ## Updates on your terms
 

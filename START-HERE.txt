@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.1.18
+OFFLINE CHAT VIEWER v1.1.30
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.
@@ -38,7 +38,9 @@ No installation or internet is needed for the standard reader on Windows x64.
 Exact + typos search works immediately. Selecting Semantic in search automatically
 sets up the portable CPU engine/model in the background; progress is in Settings.
 First semantic setup needs internet. No separate Python installation or restart.
-Your original exports are never modified. Your uploaded chats are not bundled here.
+Normal reading and indexing never modify your exports. An explicitly reviewed
+Delete original action removes only verified selected source files; recovery
+copies are retained. Your uploaded chats are not bundled here.
 
 Full instructions: README.md. UI preview: docs/preview.png.
 
@@ -133,5 +135,7 @@ Your login profile stays in LOCALAPPDATA/OfflineChatViewer/ChatGPTConnection,
 outside exports and release ZIPs. Keep the viewer running for remote queue work.
 Select chats, choose retention, then review and Run the deletion queue. Nothing
 is remotely deleted merely by adding a chat. JSON recovery must match ChatGPT.
-Native Codex deletions wait for Codex to close and retain recovery transcripts.
+Native Codex deletions process the selected session locally even while other
+Codex sessions are open. Locked or changing selected files retry. Verified
+recovery copies are retained; removed sessions stay excluded from rediscovery.
 ChatGPT Projects is separate from Categories and Disk folders.

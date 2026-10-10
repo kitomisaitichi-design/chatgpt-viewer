@@ -24,12 +24,19 @@
   if(a.op==='context')return {ok:true,scope:scope(),cooldown:cooldown/1000};
   if(!matches(a.scope))return {ok:false,status:409,error:'The ChatGPT account/workspace changed; reconnect and review'};
   if(!/^[a-zA-Z0-9_-]{8,160}$/.test(a.cid||a.id||'')||!['get','viewerDelete'].includes(a.op))return {ok:false,status:400,error:'Unsupported viewer request'};
-  const wait=Math.max(cooldown, (inFlight||activeStreams)?Date.now()+8000:lastStart+8000);
-  if(wait>Date.now())return {ok:false,status:429,retryAfter:String(Math.ceil((wait-Date.now())/1000)),error:'Sharing ChatGPT traffic pacing'};
+  const now=Date.now();
+  if(cooldown>now)return {ok:false,status:429,retryAfter:String(Math.ceil((cooldown-now)/1000)),error:'ChatGPT rate limit in this tab'};
+  const wait=(inFlight||activeStreams)?now+8000:lastStart+8000;
+  // Waiting for the user's own ChatGPT activity is NOT an HTTP 429.
+  // A real 429 must be reported separately so the viewer doesn't turn every
+  // brief local pacing delay into a durable, global rate-limit cooldown.
+  if(wait>now)return {ok:false,status:0,localPacing:true,retryAfter:String(Math.ceil((wait-now)/1000)),error:'Waiting for active ChatGPT traffic'};
   const headers={authorization:'Bearer '+token,accept:'application/json','content-type':'application/json','oai-language':'en-US'};
   const device=cookie('oai-did');if(device){headers['oai-device-id']=device;headers['oai-did']=device;}if(a.scope.account)headers['chatgpt-account-id']=a.scope.account;
   lastStart=Date.now();
-  const r=await fetchOriginal('/backend-api/conversation/'+encodeURIComponent(a.cid||a.id),{method:a.op==='viewerDelete'?'PATCH':'GET',headers,credentials:'include',...(a.op==='viewerDelete'?{body:JSON.stringify({is_visible:false})}:{}),signal:AbortSignal.timeout(60000)});
+  // Each verification must be a fresh authenticated network read, never a
+  // browser-cache replay of the first missing response.
+  const r=await fetchOriginal('/backend-api/conversation/'+encodeURIComponent(a.cid||a.id),{method:a.op==='viewerDelete'?'PATCH':'GET',headers,credentials:'include',...(a.op==='viewerDelete'?{body:JSON.stringify({is_visible:false})}:{cache:'no-store'}),signal:AbortSignal.timeout(60000)});
   if(r.status===401){token=null;sessionAt=0;}
   if(!matches(a.scope))return {ok:false,status:409,error:'Workspace changed during request'};
   const retryAfter=r.headers.get('retry-after');if(r.status===429)cooldown=Date.now()+(Number(retryAfter)>0?Number(retryAfter)*1000:60000);

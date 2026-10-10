@@ -1,12 +1,11 @@
 """Reversible local removal of validated Codex session JSONL files."""
-import csv
+import errno
 import hashlib
 import json
 import os
 import re
 import shutil
 import sqlite3
-import subprocess
 import threading
 import time
 import uuid
@@ -27,31 +26,9 @@ class _Deferred(RuntimeError):
     pass
 
 
-def codex_process_running():
-    """Return whether a Codex process is present; fail closed on probe errors."""
-    if os.name == "nt":
-        command = ["tasklist", "/FI", "IMAGENAME eq codex.exe", "/FO", "CSV", "/NH"]
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=6, check=False)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise RuntimeError(f"Could not check running processes: {error}") from error
-        if result.returncode:
-            raise RuntimeError(result.stderr.strip() or "tasklist could not inspect running processes")
-        try:
-            names = [row[0].casefold() for row in csv.reader(result.stdout.splitlines()) if row]
-        except csv.Error as error:
-            raise RuntimeError(f"Could not read tasklist output: {error}") from error
-    else:
-        try:
-            result = subprocess.run(
-                ["ps", "-A", "-o", "comm="], capture_output=True, text=True, timeout=3, check=False
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise RuntimeError(f"Could not check running processes: {error}") from error
-        if result.returncode:
-            raise RuntimeError(result.stderr.strip() or "ps could not inspect running processes")
-        names = [Path(line.strip()).name.casefold() for line in result.stdout.splitlines() if line.strip()]
-    return any(Path(name).name.startswith("codex") for name in names)
+def _file_in_use(error):
+    """Distinguish a selected-file sharing violation from unrelated failures."""
+    return getattr(error, "winerror", None) in (32, 33) or error.errno == errno.EBUSY
 
 
 def _digest(path):
@@ -70,18 +47,16 @@ def _stat_key(path):
 class NativeDeletionQueue:
     """Durable, local-only queue. Codex-owned SQLite files are never opened here."""
 
-    def __init__(self, archive, process_running=None, poll_interval=7.5, session_lock=None):
+    def __init__(self, archive, poll_interval=7.5, session_lock=None):
         self.archive = archive
         self.database = archive.data_dir / QUEUE_FILE
         self.recovery_root = archive.data_dir / "native-codex-recovery"
-        self.process_running = process_running or codex_process_running
         self.poll_interval = max(0.1, float(poll_interval))
         self.session_lock = session_lock or threading.RLock()
         self.lock = threading.RLock()
         self.tick_lock = threading.Lock()
         self.stop_event = threading.Event()
         self.worker = None
-        self.guard = {"checked": None, "codex_running": None, "error": ""}
         self._initialize()
 
     @contextmanager
@@ -226,8 +201,9 @@ class NativeDeletionQueue:
         """Start only these reviewed native Codex file removals asynchronously.
 
         Unlike action('run'), unrelated queued ChatGPT/Codex jobs are not run.
-        Originals are unlinked only after source validation, private recovery
-        verification, and a check that Codex has closed.
+        Originals are unlinked only after source validation and private recovery
+        verification. Other Codex sessions may remain open; only a selected
+        source that is changing or locked is deferred.
         """
         if not isinstance(ids, list) or not 1 <= len(ids) <= 1000 or len(set(ids)) != len(ids):
             raise ValueError("Select 1 to 1000 distinct native Codex sessions")
@@ -261,13 +237,11 @@ class NativeDeletionQueue:
         for row in rows:
             counts[row["state"]] = counts.get(row["state"], 0) + 1
         with self.lock:
-            guard = dict(self.guard)
             worker_running = bool(self.worker and self.worker.is_alive())
         return {
             "jobs": rows,
             "counts": counts,
             "worker_running": worker_running,
-            "process_guard": guard,
             "recovery_root": str(self.recovery_root),
         }
 
@@ -340,20 +314,6 @@ class NativeDeletionQueue:
         return [row for row in self.rows()
                 if row["run"] and row["state"] in ACTIVE_STATES]
 
-    def _record_guard(self, running=None, error=""):
-        with self.lock:
-            self.guard = {"checked": time.time(), "codex_running": running, "error": error}
-
-    def _check_process(self):
-        try:
-            running = bool(self.process_running())
-        except Exception as error:
-            self._record_guard(None, str(error))
-            raise _Deferred(f"Could not confirm Codex is closed; deletion is deferred: {error}") from error
-        self._record_guard(running, "")
-        if running:
-            raise _Deferred("Codex is running; local deletion is deferred")
-
     def _set_job_state(self, row, state, error="", only_active=False):
         with self.lock, self.connect() as db:
             predicate = " AND state IN ('queued','waiting','running')" if only_active else ""
@@ -382,13 +342,6 @@ class NativeDeletionQueue:
             rows = self._active_rows()
             if not rows:
                 return self.status()
-            try:
-                self._check_process()
-            except _Deferred as error:
-                for row in rows:
-                    self._set_job_state(row, "waiting", str(error), only_active=True)
-                return self.status()
-
             for row in rows:
                 if self.stop_event.is_set() or self.archive.cache_stop.is_set():
                     return self.status()
@@ -444,13 +397,18 @@ class NativeDeletionQueue:
 
         temporary = recovery.with_name("session.jsonl." + uuid.uuid4().hex + ".tmp")
         try:
-            shutil.copy2(source, temporary)
+            try:
+                shutil.copy2(source, temporary)
+            except OSError as error:
+                if _file_in_use(error):
+                    raise _Deferred("This Codex session file is in use; retrying local deletion") from error
+                raise
             with temporary.open("rb+") as stream:
                 os.fsync(stream.fileno())
             copied_hash = _digest(temporary)
             source_hash = _digest(source)
             if before != _stat_key(source) or source_hash != copied_hash:
-                raise ValueError("The session changed during backup; the original was left in place")
+                raise _Deferred("This Codex session changed during backup; retrying local deletion")
             metadata = session_header(temporary)
             if str(metadata.get("id")) != session_id:
                 raise ValueError("The recovery copy does not match the selected session ID")
@@ -585,7 +543,6 @@ class NativeDeletionQueue:
                 raise _Deferred("The job was paused or removed before moving the original")
             if self.stop_event.is_set() or self.archive.cache_stop.is_set():
                 raise _Deferred("The queue stopped before moving the original")
-            self._check_process()
             self._persist_exclusion(session_id)
             self._retarget_viewer_source(session_id, source, recovery)
 
@@ -596,11 +553,15 @@ class NativeDeletionQueue:
                     raise _Deferred("The queue stopped before moving the original")
                 self._validate_session(source, session_id, root)
                 if source_key != _stat_key(source) or source_hash != _digest(source):
-                    raise ValueError("The session changed after backup; the original was left in place")
+                    raise _Deferred("This Codex session changed after backup; retrying local deletion")
                 if _digest(recovery) != source_hash:
                     raise ValueError("The recovery copy no longer matches the original session")
-                self._check_process()
-                source.unlink()
+                try:
+                    source.unlink()
+                except OSError as error:
+                    if _file_in_use(error):
+                        raise _Deferred("This Codex session file is in use; retrying local deletion") from error
+                    raise
                 if source.exists():
                     raise OSError("The original session is still present after moving to recovery")
 

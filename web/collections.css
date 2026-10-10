@@ -7,6 +7,8 @@
 
 #delete-queue-title::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin:0 11px 3px 0}#delete-queue-dialog[data-phase=running] #delete-queue-title::before,#delete-queue-dialog[data-phase=done] #delete-queue-title::before{background:#42bd83}#delete-queue-dialog[data-phase=waiting] #delete-queue-title::before{background:#d8b56d}.delete-options label[hidden]{display:none}
 
+.delete-origin-list{display:grid;gap:12px;max-height:230px;overflow:auto;padding:12px;border:1px solid var(--border);border-radius:13px;background:var(--hover)}.delete-origin-list[hidden]{display:none}.delete-origin-list::before{content:'This chat ID occurs in backups with different account-scope keys. Choose its original export. Only the matching ChatGPT account can process its remote deletion. Other saved exports remain on disk, but the shared chat ID will be hidden from this viewer index after completion.';font-size:12px;line-height:1.6;color:var(--muted)}.delete-origin-item{display:grid;gap:7px;font-size:13px}.delete-origin-item strong{font-weight:600;overflow-wrap:anywhere}.delete-origin-item select{width:100%;max-width:100%;padding:10px;border:1px solid var(--border);border-radius:9px;background:var(--panel);color:var(--text)}
+
 /* Keep the controls and moving rows on stable layers across status polls. */
 #trash-panel{width:440px;padding:22px;gap:14px;border-radius:24px;background:linear-gradient(145deg,color-mix(in srgb,var(--panel),var(--text) 3%),var(--panel) 55%);box-shadow:0 24px 80px #0007}
 #trash-panel .trash-heading h3{display:flex;align-items:center;gap:10px;font-size:22px;font-weight:650}#trash-count{font-size:15px;font-weight:400;color:var(--muted)}

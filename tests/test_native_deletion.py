@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import sys
@@ -46,7 +47,6 @@ class NativeDeletionTests(unittest.TestCase):
         self.archive.enable_ui_cache()
         if self.archive.cache_thread:
             self.archive.cache_thread.join(timeout=5)
-        self.running = False
         self.codex = None
         self.env_patch = patch.dict(os.environ, {"CODEX_HOME": str(self.home)})
         self.env_patch.start()
@@ -68,11 +68,10 @@ class NativeDeletionTests(unittest.TestCase):
     def queue(self):
         return NativeDeletionQueue(
             self.archive,
-            process_running=lambda: self.running,
             session_lock=self.codex.session_lock,
         )
 
-    def test_confirmation_durable_queue_and_codex_process_defer(self):
+    def test_confirmation_durable_queue_and_local_delete_without_codex_shutdown(self):
         queue = self.queue()
         queue.enqueue([self.session_id], mode="recovery")
         job = queue.rows()[0]
@@ -89,15 +88,6 @@ class NativeDeletionTests(unittest.TestCase):
         with patch.object(queue, "start"):
             queue.action("run", [job["id"]])
 
-        self.running = True
-        deferred = queue.tick()["jobs"][0]
-        self.assertEqual(deferred["state"], "waiting")
-        self.assertIn("Codex is running", deferred["error"])
-        self.assertTrue(self.source.is_file())
-        self.assertFalse(Path(job["recovery_path"]).exists())
-        self.assertNotIn(self.session_id, self.archive.settings().get(EXCLUSIONS_SETTING, []))
-
-        self.running = False
         original_unlink = Path.unlink
         unlink_observed = []
 
@@ -143,6 +133,30 @@ class NativeDeletionTests(unittest.TestCase):
         self.assertEqual(rendered_source, recovery)
         self.assertEqual(self.archive.asset(self.session_id, self.attachment.as_uri(), indexed=False), self.attachment)
         self.assertEqual(self.archive.foreground_page(self.session_id)["total"], 2)
+
+    def test_only_locked_selected_file_waits_and_retries_while_codex_stays_open(self):
+        queue=self.queue()
+        queue.enqueue([self.session_id], mode="library")
+        job=queue.rows()[0]
+        with patch.object(queue, "start"):
+            queue.action("run", [job["id"]])
+        original_unlink=Path.unlink
+
+        def selected_file_locked(path, *args, **kwargs):
+            if path == self.source:
+                raise OSError(errno.EBUSY, "Selected Codex JSONL still held by another process")
+            return original_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", new=selected_file_locked):
+            waiting=queue.tick()["jobs"][0]
+        self.assertEqual(waiting["state"], "waiting")
+        self.assertIn("This Codex session file is in use", waiting["error"])
+        self.assertTrue(self.source.exists())
+        self.assertEqual(Path(waiting["recovery_path"]).read_bytes(), self.original_bytes)
+        completed=queue.tick()["jobs"][0]
+        self.assertEqual(completed["state"], "confirmed")
+        self.assertFalse(self.source.exists())
+        self.assertEqual(self.archive.catalog(), [])
 
     def test_exclusion_survives_restart_and_discovery_skips_session(self):
         queue = self.queue()

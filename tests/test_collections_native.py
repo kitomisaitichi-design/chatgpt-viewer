@@ -1,7 +1,7 @@
-import json, os, sqlite3, tempfile, unittest
+import json, os, sqlite3, tempfile, unittest, time
 from pathlib import Path
 from unittest.mock import patch
-from viewer import Archive
+from viewer import Archive, Server
 from preferences import attach
 from library_files import FileCatalog
 from thread_images import ThreadImages
@@ -27,7 +27,7 @@ class CollectionsNative(unittest.TestCase):
   with patch.object(q,'start'):q.action('run',[r['id'] for r in q.rows()])
   q.tick();return q.rows()[0]
  def receipt(self,row,**extra):
-  write(self.root/'.viewer-queue/receipts'/(row['id']+'.json'),dict(schema=SCHEMA,id=row['id'],cid=row['cid'],scope=row['scope'],run=row['run'],state='confirmed',verified=True,**extra))
+  write(Path(row['root'])/'.viewer-queue/receipts'/(row['id']+'.json'),dict(schema=SCHEMA,id=row['id'],cid=row['cid'],scope=row['scope'],run=row['run'],state='confirmed',verified=True,**extra))
  def test_bookmarks_and_manual_kind_persist_after_reindex_and_version_migration(self):
   cid,p=self.chat();profile=self.root/'preferences.json';attach(self.a,profile);self.a.organize(cid,dict(bookmarked=1,kind_override='codex'));item=next(self.a.read_items(p));self.a.store(item,p,'new',self.root,{})
   c=self.a.catalog()[0];self.assertEqual((c['bookmarked'],c['kind_override']),(1,'codex'));b=Archive(self.root/'other',background_process=False)
@@ -43,6 +43,105 @@ class CollectionsNative(unittest.TestCase):
   command=read(self.root/'.viewer-queue/commands'/(row['id']+'.json'));self.assertEqual(command['content_hash'],'original-exporter-hash')
   with self.assertRaises(ValueError):q.action('run',[row['id']])
   self.receipt(row);q.tick();self.assertEqual(q.rows()[0]['state'],'confirmed');self.assertEqual(self.a.catalog(),[]);self.assertFalse(p.exists());self.assertIn(cid,self.a.state()['removed']);self.assertEqual(len(q.rows()),1)
+ def duplicate_origin(self,scope):
+  cid='12345678-1234-1234-1234-123456789abc'
+  other=self.root/'other-export';other.mkdir()
+  alternate=other/(cid+'.json');alternate.write_text(json.dumps(dict(id=cid,title='Other saved copy',messages=[dict(role='user',content='Read me')])))
+  entry=dict(id=cid,json=alternate.name,content_hash='other-hash')
+  manifest=other/'conversation-index.json';write(manifest,dict(scope=scope,entries=[entry]))
+  self.a.register_manifest(entry,manifest,other)
+  return other,alternate
+ def test_different_account_origins_require_explicit_export_and_limit_local_cleanup(self):
+  cid,original=self.chat();other,alternate=self.duplicate_origin('another-account')
+  q=self.queue();self.assertEqual(len(q.account_origins(cid)),2)
+  with self.assertRaisesRegex(ValueError,'Choose the original export'):q.chat_account(cid)
+  with self.assertRaisesRegex(ValueError,'Choose the original export'):q.enqueue([cid])
+  self.assertEqual(q.rows(),[])
+  with self.assertRaisesRegex(ValueError,'not a saved source'):q.enqueue([cid],origins={cid:str(self.root/'untrusted')})
+  q.enqueue([cid],origins={cid:str(self.root.resolve())})
+  row=q.rows()[0];self.assertEqual(row['root'],str(self.root.resolve()))
+  with patch.object(q,'start'):q.action('run',[row['id']])
+  q.tick()
+  index=read(self.a.data_dir/'deletion-recovery'/row['id']/'index.json')
+  self.assertEqual(index['root'],str(self.root.resolve()))
+  self.assertTrue(index['sources'])
+  self.assertTrue(all(Path(s['root'])==self.root.resolve() for s in index['sources']))
+  row=q.rows()[0]
+  self.receipt(row,remote_state='deleted');q.tick()
+  self.assertEqual(q.rows()[0]['state'],'confirmed')
+  self.assertFalse(original.exists())
+  self.assertTrue(alternate.exists(),'Choosing one account must not delete the other account backup')
+ def test_duplicate_exports_with_same_scope_choose_primary_without_account_error(self):
+  cid,original=self.chat();other,alternate=self.duplicate_origin('account:workspace')
+  q=self.queue()
+  self.assertEqual(len(q.account_origins(cid)),2)
+  self.assertEqual(q.chat_account(cid),(self.root.resolve(),'account:workspace'))
+  q.enqueue([cid]);self.assertEqual(q.rows()[0]['root'],str(self.root.resolve()))
+ def test_delete_choice_exposes_two_origins_and_validates_explicit_selection(self):
+  cid,original=self.chat();other,alternate=self.duplicate_origin('different-owner')
+  server=Server(('127.0.0.1',0),self.a)
+  try:
+   choices=server.deletion_choices([cid])['choices']
+   self.assertEqual(choices[0]['kind'],'linked')
+   self.assertEqual({o['root'] for o in choices[0]['origins']},{str(self.root.resolve()),str(other.resolve())})
+   self.assertEqual(len({o['scope_hint'] for o in choices[0]['origins']}),2)
+   # A remote-deleted receipt in one account must not turn a still-linked
+   # second account into a local-only/orphan deletion.
+   with self.a.connect() as db:
+    db.execute('INSERT INTO remote_chat_state VALUES(?,?,?,?,?,?,?)',
+               (str(self.root.resolve()),cid,'account:workspace','deleted',100,'synthetic test',''))
+   self.assertEqual(server.deletion_choices([cid])['choices'][0]['kind'],'linked')
+   with self.assertRaisesRegex(ValueError,'Choose the original export'):server.deletion_submit([cid],'delete')
+   with self.assertRaisesRegex(ValueError,'not a saved source'):server.deletion_submit([cid],'delete',{cid:str(self.root/'forged')})
+   server.deletion_submit([cid],'preserve',{cid:str(other.resolve())})
+   self.assertEqual(server.deletions.rows()[0]['root'],str(other.resolve()))
+   self.assertEqual(server.deletions.rows()[0]['mode'],'preserve')
+  finally:server.server_close()
+ def test_remote_run_requires_connected_matching_account_before_dispatch(self):
+  cid,_=self.chat()
+  server=Server(('127.0.0.1',0),self.a)
+  try:
+   server.deletions.enqueue([cid])
+   job=server.deletions.rows()[0]
+   with self.assertRaisesRegex(ValueError,'not connected'):server.queue_action('run',[job['id']])
+   self.assertEqual(server.deletions.rows()[0]['state'],'queued')
+   server.deletions.browser.clients['fixture']=dict(id='fixture',kind='native',
+      key='wrong-account',connected=True,updated=time.time())
+   with self.assertRaisesRegex(ValueError,'does not match'):server.queue_action('run',[job['id']])
+   self.assertEqual(server.deletions.rows()[0]['state'],'queued')
+   server.deletions.browser.clients['fixture']['key']=job['scope']
+   with patch.object(server.deletions,'action') as dispatch:
+    server.queue_action('run',[job['id']])
+    dispatch.assert_called_once_with('run',[job['id']])
+  finally:server.server_close()
+ def test_old_verified_delete_receipt_allows_local_cleanup_without_connection(self):
+  cid,p=self.chat()
+  server=Server(('127.0.0.1',0),self.a)
+  try:
+   scope=server.deletions.chat_account(cid)[1]
+   write(self.root/'.viewer-queue/receipts/old-viewer.json',
+         dict(schema=SCHEMA,id='old-viewer',cid=cid,scope=scope,
+              state='confirmed',remote_state='deleted',verified=True,updated=time.time()))
+   server.deletions.enqueue([cid],mode='library')
+   job=server.deletion_status()['jobs'][0]
+   self.assertTrue(job['proof_ready'])
+   with patch.object(server.deletions,'action') as dispatch:
+    server.queue_action('run',[job['id']])
+    dispatch.assert_called_once_with('run',[job['id']])
+   self.assertTrue(p.is_file(),'Queueing must not delete files before the reviewed run')
+  finally:server.server_close()
+ def test_selected_secondary_root_snapshot_and_cleanup_leave_primary_files(self):
+  cid,original=self.chat();other,alternate=self.duplicate_origin('different-owner')
+  q=self.queue();q.enqueue([cid],origins={cid:str(other.resolve())})
+  with patch.object(q,'start'):q.action('run',[q.rows()[0]['id']])
+  q.tick();row=q.rows()[0]
+  index=read(self.a.data_dir/'deletion-recovery'/row['id']/'index.json')
+  self.assertTrue(index['sources'])
+  self.assertEqual({Path(f['root']) for f in index['sources']},{other.resolve()})
+  self.receipt(row,remote_state='deleted');q.tick()
+  self.assertEqual(q.rows()[0]['state'],'confirmed')
+  self.assertTrue(original.exists(),'The other account\'s local original must be retained')
+  self.assertFalse(alternate.exists())
  def test_unavailable_library_does_not_erase_local_transcript_without_remote_deletion(self):
   cid,p=self.chat();raw=p.read_bytes();q=self.queue();q.enqueue([cid]);row=self.run_queue(q)
   self.receipt(row,remote_state='unavailable');q.tick();self.assertEqual(q.rows()[0]['state'],'failed');self.assertTrue(p.exists());self.assertEqual(p.read_bytes(),raw)
@@ -52,6 +151,24 @@ class CollectionsNative(unittest.TestCase):
   self.assertNotIn(cid,self.a.removed_ids())
   with self.a.connect() as db:
    for table,key in [('chats','id'),('messages','cid'),('chunks','cid'),('titles','cid'),('manifest_entries','cid')]:self.assertGreater(db.execute('SELECT count(*) FROM '+table+' WHERE '+key+'=?',(cid,)).fetchone()[0],0)
+ def test_old_single_404_receipt_is_discarded_and_rechecked(self):
+  cid,p=self.chat();q=self.queue();q.browser.endpoint='http://127.0.0.1:23456'
+  q.enqueue([cid]);row=self.run_queue(q)
+  self.receipt(row,remote_state='unavailable');q.tick()
+  self.assertEqual(q.rows()[0]['state'],'failed')
+  self.assertTrue(p.is_file())
+  with self.a.connect() as db:
+   db.execute("INSERT OR REPLACE INTO browser_requests VALUES(?,?,?,?,?,?,?,?)",
+              (row['id'],'done','','',0,0,0,time.time()))
+  with patch.object(q,'start'):q.action('run',[row['id']])
+  self.assertEqual(q.rows()[0]['state'],'preparing')
+  with self.a.connect() as db:
+   self.assertEqual(db.execute('SELECT phase FROM browser_requests WHERE job=?',(row['id'],)).fetchone()[0],'preflight')
+  q.tick()
+  self.assertEqual(q.rows()[0]['state'],'waiting')
+  self.assertTrue(p.is_file())
+  self.assertEqual(json.loads(q.rows()[0]['receipt'] or '{}'),{})
+  self.assertNotIn(cid,self.a.removed_ids())
  def test_changed_source_reports_cleanup_failure_and_retry_never_resends_remote(self):
   cid,p=self.chat();original=p.read_bytes();q=self.queue();q.enqueue([cid]);row=self.run_queue(q);p.write_bytes(original+b' ')
   self.receipt(row);q.tick();self.assertEqual(q.rows()[0]['state'],'failed');self.assertTrue(p.exists());self.assertEqual(len(self.a.catalog()),1)

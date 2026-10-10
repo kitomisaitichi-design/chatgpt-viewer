@@ -66,6 +66,12 @@ class BrowserCompanion:
                 job TEXT PRIMARY KEY, phase TEXT, lease TEXT, owner TEXT, expires REAL,
                 next_at REAL, attempts INTEGER, updated REAL)''')
             db.execute('CREATE TABLE IF NOT EXISTS browser_checks(id TEXT PRIMARY KEY,cid TEXT,root TEXT,scope TEXT,created REAL,done INTEGER)')
+            db.execute('CREATE TABLE IF NOT EXISTS browser_throttle(key TEXT PRIMARY KEY,until REAL)')
+            # First authenticated absent response, scoped to this exact job.
+            # A second independent GET is required before local cleanup.
+            db.execute('''CREATE TABLE IF NOT EXISTS browser_absence(
+                job TEXT PRIMARY KEY,cid TEXT,scope TEXT,first_status INTEGER,first_at REAL,from_phase TEXT)''')
+            db.execute('CREATE TABLE IF NOT EXISTS browser_delete_ack(job TEXT PRIMARY KEY,acknowledged REAL)')
             # Never resend an uncertain PATCH. A read decides its outcome first.
             db.execute("UPDATE browser_requests SET phase=CASE WHEN phase='delete' THEN 'verify' ELSE phase END,lease='',owner='',expires=0")
 
@@ -161,12 +167,15 @@ class BrowserCompanion:
                 leased = db.execute('SELECT * FROM browser_requests WHERE lease<>\'\' AND expires>?', (now,)).fetchone()
                 if leased:
                     return dict(response, wait=2)
-                # Persist a shared cooldown across clients, tabs and process restarts.
-                next_at = db.execute('SELECT MAX(next_at) FROM browser_requests').fetchone()[0] or 0
+                # Ordinary 8s pacing only needs recent requests. Old completed
+                # checks must not hold the entire queue indefinitely.
+                next_at = db.execute('SELECT MAX(next_at) FROM browser_requests WHERE updated>? AND next_at<=updated+10',(now-60,)).fetchone()[0] or 0
+                limit=db.execute("SELECT until FROM browser_throttle WHERE key='rate-limit'").fetchone()
+                if limit:next_at=max(next_at,limit['until'])
                 cooldown = max(0, float(data.get('cooldown', 0) or 0))
                 if cooldown > now:
                     next_at = max(next_at, min(cooldown, now+86400))
-                    db.execute('UPDATE browser_requests SET next_at=MAX(next_at,?)', (next_at,))
+                    db.execute("INSERT INTO browser_throttle(key,until) VALUES('rate-limit',?) ON CONFLICT(key) DO UPDATE SET until=MAX(until,excluded.until)",(next_at,))
                 if next_at > now:
                     return dict(response, wait=min(15, next_at-now), until=next_at)
                 rows = [r for r in self.queue.rows() if r['scope'] == key and r['state'] in ('waiting','running','retrying') and self.enabled(r)]
@@ -179,12 +188,15 @@ class BrowserCompanion:
                     phase = req['phase'] if req else 'check' if row.get('is_check') else 'preflight'
                     if phase == 'done':
                         continue
+                    # Preserve this job's backoff without delaying other ready jobs.
+                    if req and req['next_at'] > now:
+                        continue
                     if req and req['lease'] and req['expires'] <= now and phase == 'delete':
                         phase = 'verify'
                     lease = uuid.uuid4().hex
                     db.execute('INSERT OR REPLACE INTO browser_requests VALUES(?,?,?,?,?,?,?,?)',
                                (row['id'], phase, lease, ident, now+90, now+8, req['attempts'] if req else 0, now))
-                    if not row.get('is_check'):self.receipt(row, 'running', message='Checking saved revision' if phase=='preflight' else 'Verifying deletion' if phase=='verify' else 'Deleting on ChatGPT')
+                    if not row.get('is_check'):self.receipt(row, 'running', message='Checking saved revision' if phase=='preflight' else 'Confirming remote absence (second online check)' if phase=='absence-confirm' else 'Verifying deletion' if phase=='verify' else 'Deleting on ChatGPT')
                     return dict(response, wait=2, request=dict(job=row['id'], lease=lease, phase=phase, cid=row['cid'], scope=scope,
                                       op='viewerDelete' if phase=='delete' else 'get', path='/backend-api/conversation/'+row['cid']))
             return response
@@ -213,11 +225,26 @@ class BrowserCompanion:
             if not req or not row or not req['lease'] or not secrets.compare_digest(req['lease'], str(data.get('lease',''))) or req['owner']!=data.get('client'):
                 raise ValueError('Expired or duplicate browser result')
             result = data.get('result') or {}
-            status = int(result.get('status') or 0)
+            if not isinstance(result, dict):result = {}
+            try:status = int(result.get('status') or 0)
+            except (TypeError, ValueError, OverflowError):status = 0
             phase = req['phase']; next_phase = phase; attempts = req['attempts']; until = time.time()+8
             error = None
+            local_pacing = result.get('localPacing') is True and status == 0
+            if local_pacing:
+                # This wasn't a service response. An active ChatGPT stream or
+                # recent browser request asked us to wait locally. Keep its
+                # short pause on this request, not the global 429 throttle.
+                try:seconds=float(result.get('retryAfter') or 8)
+                except (TypeError, ValueError):seconds=8
+                if not 0 < seconds <= 15:seconds=8
+                until=time.time()+seconds
+            if status==429:
+                until=time.time()+retry_delay(result.get('retryAfter'))
+                db.execute("INSERT INTO browser_throttle(key,until) VALUES('rate-limit',?) ON CONFLICT(key) DO UPDATE SET until=MAX(until,excluded.until)",(until,))
             if row.get('is_check'):
                 body=result.get('data') or {}
+                if not isinstance(body, dict):body = {}
                 valid=result.get('ok') is True and (graph_hash(body) or isinstance(body.get('is_visible'),bool))
                 if valid or status in (404,410):
                     from remote_state import record
@@ -225,17 +252,27 @@ class BrowserCompanion:
                     db.commit()
                     record(self.archive,row['root'],row['cid'],row['scope'],state,'authenticated browser lookup')
                     db.execute('UPDATE browser_checks SET done=1 WHERE id=?',(row['id'],))
-                elif status!=429:
+                elif status!=429 and not local_pacing:
                     db.execute('UPDATE browser_checks SET done=1 WHERE id=?',(row['id'],))
-                db.execute("UPDATE browser_requests SET lease='',owner='',expires=0,next_at=? WHERE job=?",(time.time()+retry_delay(result.get('retryAfter')) if status==429 else time.time()+8,row['id']))
+                db.execute("UPDATE browser_requests SET lease='',owner='',expires=0,next_at=?,updated=? WHERE job=?",(until,time.time(),row['id']))
                 return dict(accepted=True)
-            if status == 429:
-                until = time.time()+retry_delay(result.get('retryAfter'))
+            if local_pacing:
+                self.receipt(row,'retrying',until=until,message='Waiting for active ChatGPT traffic (local pacing)')
+            elif status == 429:
+                if phase=='absence-confirm':
+                    db.execute('DELETE FROM browser_absence WHERE job=?',(row['id'],))
+                    next_phase='preflight'
                 self.receipt(row,'retrying',until=until,message='ChatGPT asked to wait; resumes automatically')
             elif status in (401,403,409):
+                if phase=='absence-confirm':
+                    db.execute('DELETE FROM browser_absence WHERE job=?',(row['id'],))
+                    next_phase='preflight'
                 if phase=='delete':next_phase='verify'
                 self.receipt(row,'paused',error=result.get('error') or 'Reconnect to the original ChatGPT account')
             elif result.get('ok') is not True and status not in (404,410):
+                if phase=='absence-confirm':
+                    db.execute('DELETE FROM browser_absence WHERE job=?',(row['id'],))
+                    next_phase='preflight'
                 attempts += 1
                 # An uncertain PATCH must be checked before any possible retry.
                 if phase=='delete':next_phase='verify'
@@ -244,15 +281,43 @@ class BrowserCompanion:
                     self.receipt(row,'retrying',until=until,error=result.get('error') or 'Connection interrupted; checking outcome')
                 else:error = result.get('error') or 'Request failed twice; review and reconnect'
             elif phase == 'delete':
+                if result.get('ok') is True:
+                    db.execute('INSERT OR REPLACE INTO browser_delete_ack VALUES(?,?)',(row['id'],time.time()))
                 next_phase = 'verify'
             else:
                 body = result.get('data') or {}
+                if not isinstance(body, dict):body = {}
                 missing = status in (404,410)
-                deleted = body.get('is_visible') is False
+                same_id = not (body.get('conversation_id') or body.get('id')) or (body.get('conversation_id') or body.get('id')) == row['cid']
+                deleted = result.get('ok') is True and isinstance(body,dict) and body.get('is_visible') is False and same_id
                 if missing or deleted:
-                    state = 'deleted' if phase=='verify' or deleted else 'unavailable'
-                    self.receipt(row,'confirmed',verified=True,remote_state=state)
-                    next_phase = 'done'
+                    first=db.execute('SELECT * FROM browser_absence WHERE job=?',(row['id'],)).fetchone()
+                    acknowledged=phase=='verify' and db.execute('SELECT 1 FROM browser_delete_ack WHERE job=?',(row['id'],)).fetchone()
+                    if acknowledged:
+                        # Ordinary successful PATCH + verified GET must retain
+                        # the previous three-request timing. Only chats that
+                        # were *already absent* need the extra online check.
+                        self.receipt(row,'confirmed',verified=True,remote_state='deleted')
+                        next_phase='done'
+                    elif (phase=='absence-confirm' and first and first['cid']==row['cid'] and
+                        first['scope']==row['scope'] and first['from_phase'] in ('preflight','verify') and
+                        0 < time.time()-first['first_at'] < 3600):
+                        # Both results came from separate scoped GET leases;
+                        # neither network errors nor rate limits count.
+                        self.receipt(row,'confirmed',verified=True,remote_state='deleted',
+                                     absence_checks=2,absence_statuses=[first['first_status'],status],
+                                     message='Already absent on ChatGPT; verified twice. Local cleanup follows.')
+                        db.execute('DELETE FROM browser_absence WHERE job=?',(row['id'],))
+                        next_phase = 'done'
+                    else:
+                        db.execute('INSERT OR REPLACE INTO browser_absence VALUES(?,?,?,?,?,?)',
+                                   (row['id'],row['cid'],row['scope'],status,time.time(),
+                                    phase if phase in ('preflight','verify') else 'preflight'))
+                        self.receipt(row,'retrying',until=until,message='Chat already absent online; confirming with a second authenticated check')
+                        next_phase='absence-confirm'
+                elif phase=='absence-confirm':
+                    db.execute('DELETE FROM browser_absence WHERE job=?',(row['id'],))
+                    error='ChatGPT returned inconsistent availability across the two checks; no remote deletion was sent. Review the original account.'
                 elif not graph_hash(body) or (body.get('conversation_id') or body.get('id') or row['cid']) != row['cid']:
                     error = 'Unrecognized conversation response; no deletion was sent'
                 elif phase == 'verify':

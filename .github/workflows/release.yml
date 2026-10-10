@@ -43,6 +43,8 @@ jobs:
           node tests/check_media_player.js
           node tests/check_organization.mjs
           node tests/check_browser_connection.mjs
+          node tests/check_browser_pacing.mjs
+          node tests/check_structured_content.js
       - name: Build and publish ZIP and checksum
         env:
           GH_TOKEN: ${{ github.token }}

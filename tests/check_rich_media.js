@@ -1,5 +1,5 @@
 const assert=require('assert'),vm=require('vm'),fs=require('fs'),path=require('path');
-const c={window:{addEventListener(){}},location:{href:'http://127.0.0.1:1234/',origin:'http://127.0.0.1:1234'},URL,URLSearchParams};vm.createContext(c);for(const file of ['midi-player.js','rich-media.js','widgets.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../web',file),'utf8'),c);
+const c={window:{addEventListener(){}},location:{href:'http://127.0.0.1:1234/',origin:'http://127.0.0.1:1234'},URL,URLSearchParams};vm.createContext(c);for(const file of ['midi-player.js','rich-media.js','structured-content.js','widgets.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../web',file),'utf8'),c);
 const midi=Buffer.from('4d546864000000060000000100604d54726b0000001000903c6460803c000090406460804000','hex'); // two half-second notes
 const buffer=midi.buffer.slice(midi.byteOffset,midi.byteOffset+midi.length);new DataView(buffer).setUint32(18,Buffer.from(buffer).length-22);
 const parsed=c.MidiPlayer.parse(buffer);assert.equal(parsed.notes.length,2);assert.equal(parsed.notes[0].note,60);assert.equal(parsed.notes[0].end,.5);assert.equal(parsed.notes[1].start,.5);assert.equal(parsed.duration,1);
