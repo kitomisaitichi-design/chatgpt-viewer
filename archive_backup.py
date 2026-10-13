@@ -129,8 +129,10 @@ def build_zip(root,destination,files,manifest,settings=None,progress=lambda **kw
             grouped=[('indexes/'+kind+'.json',json.dumps({'schema':'offline-chat-viewer/file-group-v1','kind':kind,'base':'../','files':[r for r in state['files'] if r['kind']==kind]},ensure_ascii=False,sort_keys=True,separators=(',',':'))) for kind in (*FORMATS,'metadata')]
             for name,value in [('archive-index.json',json.dumps(index[0],ensure_ascii=False,sort_keys=True,separators=(',',':'))),('OPEN-ARCHIVE.html',index[1]),('save-state.json',json.dumps(state,ensure_ascii=False,sort_keys=True,separators=(',',':'))),('save-state.csv',table),*grouped]:
                 info=zipfile.ZipInfo(name,date_time=(1980,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;z.writestr(info,value)
+    # Verify before replacing: cancellation must preserve the last completed ZIP.
+    hashes=digest(temporary,check)
     check();os.replace(temporary,destination)
-    return digest(destination,check)
+    return hashes
 
 def extract_zip(path,destination,progress=lambda **kw:None,check=lambda:None):
     destination=Path(destination).resolve();destination.mkdir(parents=True,exist_ok=False)
@@ -164,6 +166,9 @@ def extract_zip(path,destination,progress=lambda **kw:None,check=lambda:None):
                 ns=int(value.get('mtime_ns',0))
                 if ns>0:os.utime(target,ns=(ns,ns))
     return destination
+
+class BackupIntegrityError(ValueError):
+    """A completed artifact must be rebuilt before delivery can resume."""
 
 class BackupManager:
     def __init__(self,archive,app):
@@ -240,6 +245,7 @@ class BackupManager:
             files=select_files(files,config['include_formats'])
         return config,root,files,fingerprint,missing,links
     def preview(self):
+        if not self.config()['source']:raise ValueError('Choose an export folder before reviewing full-archive files. Selected-chat backups remain available from the sidebar.')
         # Preview checks file names and sizes, not multi-gigabyte contents or hashes.
         if self.status()['running']:raise ValueError('Wait for the current backup before checking its contents.')
         self.cancel.clear();config,root,files,*_=self.inventory();return dict(source=config['source'],up=config['up'],root=str(root),counts=counts(files),local_folder=config['local_folder'],route=config['route'])
@@ -279,10 +285,16 @@ class BackupManager:
         if not running and time.time()-progress.get('at',0)>5 and (progress.get('phase','').startswith(('Packaging','Uploading','Copying')) or progress.get('phase') in ('Preparing backup','Finding linked attachments','Checking backup changes','Unpacking archive','Integrating conversations')):
             progress={'phase':'Previous job stopped','message':'Run it again to continue. Completed backups and original files have been kept.'}
         state=self.state();public={k:state.get(k) for k in ('last_success','last_local','last_checked','last_fingerprint','missing_count','missing','last_import','source_counts','scope_root')}
-        public['files']={k:{**{field:value.get(field) for field in ('id','webViewLink','sha256','size','uploaded_at','desktop_copy')},'path':str(self.local_path(k)),'exists':self.local_path(k).is_file()} for k,value in state.get('slots',{}).items()}
+        public['files']={}
+        for mode,value in state.get('slots',{}).items():
+            path=self.local_path(mode)
+            try:stat=path.stat();exists=path.is_file()
+            except OSError:stat=None;exists=False
+            integrity='missing' if not exists else 'changed' if stat.st_size!=int(value.get('size') or -1) or value.get('zip_stat') and value['zip_stat']!=[stat.st_size,stat.st_mtime_ns] else 'verified' if value.get('zip_stat') else 'unverified'
+            public['files'][mode]={**{field:value.get(field) for field in ('id','webViewLink','sha256','size','uploaded_at','desktop_copy')},'path':str(path),'exists':exists,'integrity':integrity,'verified':integrity=='verified'}
         pending=state.get('delivery_pending',{})
         capture=state.get('capture_pending',{})
-        return dict(config=self.config(),connection=self.drive.status(),progress=progress,running=running or bool(self.worker and self.worker.is_alive()),queue=self.queue.status(),capture_pending=bool(capture),capture_retry_at=capture.get('retry_at'),delivery_pending=bool(pending),retry_at=pending.get('retry_at'),retry_error=pending.get('error',''),retry_paused=pending.get('paused',False),**public)
+        return dict(config=self.config(),connection=self.drive.status(),progress=progress,running=running or bool(self.worker and self.worker.is_alive()),queue=self.queue.status(),capture_pending=bool(capture),capture_retry_at=capture.get('retry_at'),delivery_pending=bool(pending),retry_at=pending.get('retry_at'),retry_error=pending.get('error',''),retry_paused=pending.get('paused',False),needs_rebuild=pending.get('needs_rebuild',False),needs_delivery_approval=pending.get('needs_approval',False),selected_exports=state.get('selected_exports',[])[-10:],**public)
     def update(self,**values):
         with self.progress_lock:
             if time.monotonic()-self.last_write<.25 and not values.get('force'):return
@@ -323,7 +335,10 @@ class BackupManager:
                     if not job:break
                     self.scheduled=job['scheduled'];self.current_job=job;self.last_queue_check=0
                     try:
-                        if job['kind']=='mirror':self.prepare_migration();self.resume_delivery();self.update(phase='Completed ZIPs copied',done=1,total=1,message='Verified ZIPs copied. Google Drive for desktop handles cloud sync.',force=True)
+                        if job['kind']=='selected':
+                            from selected_backup import create
+                            create(self,job)
+                        elif job['kind']=='mirror':self.prepare_migration();self.resume_delivery();self.update(phase='Completed ZIPs copied',done=1,total=1,message='Verified ZIPs copied. Google Drive for desktop handles cloud sync.',force=True)
                         elif job['kind']=='retry':
                             if self.state().get('delivery_pending'):self.resume_delivery()
                         elif job['upload'] and self.state().get('delivery_pending',{}).get('requested_at')==job['at']:self.resume_delivery()
@@ -378,7 +393,26 @@ class BackupManager:
         state.setdefault('local_baseline',state.get('baseline',{}));save_private(self.state_path,state)
     def retry_delivery(self):
         if not self.state().get('delivery_pending'):raise ValueError('There is no pending delivery to retry.')
+        if self.state()['delivery_pending'].get('needs_rebuild'):raise ValueError('Create local ZIPs first to repair the recorded verification failure. Existing files are kept.')
+        if self.state()['delivery_pending'].get('needs_approval'):raise ValueError('The local ZIPs were rebuilt. Use Copy ZIPs to Drive to approve a new delivery of these files.')
         self.queue.push('retry',True,False);self.kick();return {'queued':True}
+    def start_selected(self,ids,formats=None,destination=None):
+        from selected_backup import selection
+        chats,formats=selection(self.archive,ids,formats)
+        if destination is not None and destination!=self.config()['local_folder']:raise ValueError('The local backup folder changed since preview. Preview the selection again before creating its ZIP.')
+        queued=self.status()['running'];self.queue.push('selected',False,False,ids=sorted(c['id'] for c in chats),formats=formats,destination=self.config()['local_folder']);self.kick()
+        return {'started':not queued,'queued':queued}
+    def selected_download(self,identifier):
+        receipt=next((r for r in self.state().get('selected_exports',[]) if r['id']==identifier),None)
+        if not receipt:raise ValueError('This selected backup is not in the completed job receipts.')
+        path=Path(receipt['path'])
+        if not path.is_file() or [path.stat().st_size,path.stat().st_mtime_ns]!=[receipt['size'],receipt['mtime_ns']]:raise BackupIntegrityError('This selected ZIP changed or is missing. Create a new selected backup.')
+        return path
+    def download_path(self,mode):
+        path=self.local_path(mode);slot=self.state().get('slots',{}).get(mode,{})
+        if not slot.get('sha256') or not path.is_file() or path.stat().st_size!=int(slot.get('size') or -1):raise BackupIntegrityError('This ZIP is missing or changed. Create local ZIPs before downloading.')
+        if slot.get('zip_stat')!=[path.stat().st_size,path.stat().st_mtime_ns] and digest(path)[0]!=slot['sha256']:raise BackupIntegrityError('This ZIP does not match its saved checksum. Create local ZIPs before downloading.')
+        return path
     def run(self,upload=True):
         config=self.config();state=self.state();self.update(phase='Preparing backup',done=0,total=0,force=True)
         if not config['source']:raise ValueError('Choose the export folder first.')
@@ -399,7 +433,7 @@ class BackupManager:
             related={p for doc in [*c.get('markdown',[]),*c.get('json',[])] for p in links.get(doc,[]) if p in files and p not in c.get('markdown',[]) and p not in c.get('json',[])};c['attachments']=sorted(set(c.get('attachments',[]))|related)
             for path in [*c.get('markdown',[]),*c.get('json',[])]:source_map.append(dict(path=path,**{k:c.get(k) for k in ('id','title','url','created','updated','kind','project')}))
         source_map.sort(key=lambda c:(c['path'],c['id']))
-        safe_settings={k:v for k,v in settings.items() if k in ('categories','groupOrder','groupSort','sort','group','type','kindOverrides','theme','accent','bg','side','text','fontSize','width','showProjects','showDates','sidebarWidth','sidebarDates','catalogFilters','readChats','rememberPosition','positions','lastChat','pageSize','autoRefresh','rescanIntervalMinutes','collapsed','closedGroups')}
+        safe_settings={k:v for k,v in settings.items() if k in ('categories','groupOrder','groupSort','sort','group','type','kindOverrides','theme','accent','bg','side','text','fontSize','width','showProjects','showDates','sidebarWidth','sidebarDates','catalogFilters','readChats','rememberPosition','positions','lastChat','pageSize','autoRefresh','rescanIntervalMinutes','collapsed','closedGroups','sidebarLayout','hideSubagents')}
         presentation=dict(schema='offline-chat-viewer/v1',settings=safe_settings,organization=organization)
         setting_hash=hashlib.sha256(json.dumps(['linked-bundle-v3',presentation,source_map,config['include_formats']],sort_keys=True,separators=(',',':')).encode()).hexdigest()
         fingerprint=hashlib.sha256((fingerprint+setting_hash).encode()).hexdigest()
@@ -410,6 +444,7 @@ class BackupManager:
             manifest=dict(schema='offline-chat-viewer/backup-v1',mode=mode,fingerprint=fingerprint,base_fingerprint=state.get('last_fingerprint') if mode=='progress' else None,include_formats=config['include_formats'],files=selected,conversations=[c for c in source_map if c['path'] in selected],deleted=deleted if mode=='progress' else [],missing=missing,source=dict(selected=config['source'],up=config['up'],root=str(root)),counts=counts(selected))
             valid=path.is_file() and slot.get('path')==str(path) and slot.get('fingerprint')==fingerprint
             if valid and slot.get('zip_stat')!=[path.stat().st_size,path.stat().st_mtime_ns]:valid=digest(path,self.check)[0]==slot.get('sha256')
+            if valid:slot['zip_stat']=[path.stat().st_size,path.stat().st_mtime_ns]
             if not valid:
                 required=sum(v['size'] for v in selected.values())
                 if shutil.disk_usage(self.folder).free<required+128*1024**2:raise ValueError('Not enough free space to safely build the ZIP. Free space and retry; the previous backup is kept.')
@@ -431,6 +466,10 @@ class BackupManager:
         elif state.get('delivery_pending'):
             # A local-only action must never silently publish newly replaced slots.
             state['delivery_pending']['paused']=True
+            if any(state['delivery_pending'].get('slots',{}).get(mode,{}).get('sha256')!=slots[mode]['sha256'] for mode in modes):
+                state['delivery_pending'].update(needs_rebuild=False,needs_approval=True,error='Local ZIPs were rebuilt and verified. Previous delivery is paused; approve the current ZIPs with Copy ZIPs to Drive.')
+            elif set(state['delivery_pending'].get('modes',[]))<=set(modes) and state['delivery_pending'].get('needs_rebuild'):
+                state['delivery_pending'].update(needs_rebuild=False,error='Verified local ZIPs restored. Delivery remains paused until Retry.')
         save_private(self.state_path,state)
         self.snapshot.prune(files)
         if upload:self.resume_delivery()
@@ -441,7 +480,7 @@ class BackupManager:
         for mode in modes:
             self.check();slot=state['slots'][mode];path=Path(slot['path'])
             self.update(phase='Copying: verifying '+mode+' ZIP',done=0,total=slot['size'],force=True)
-            if not path.is_file() or digest(path,self.check)[0]!=slot['sha256']:raise ValueError('The '+mode+' ZIP does not match its saved hash. Create local ZIPs before copying.')
+            if not path.is_file() or path.stat().st_size!=int(slot['size']) or digest(path,self.check)[0]!=slot['sha256']:raise BackupIntegrityError('The '+mode+' ZIP does not match its saved hash. Create local ZIPs before copying. The existing file has been kept.')
             if config['route']=='desktop':self.publish_desktop(path,config['sync_folder'],slot,state)
             if config['route']=='api' and (slot.get('uploaded_sha256')!=slot['sha256'] or slot.get('uploaded_folder')!=config['folder_id']):
                 if slot.get('uploaded_folder') and slot['uploaded_folder']!=config['folder_id']:slot.pop('id',None);slot.pop('session',None)
@@ -468,7 +507,7 @@ class BackupManager:
             if pending['destination']!=delivery:raise ValueError('The destination changed. Run a new backup to approve delivery to this folder.')
             for mode,expected in pending['slots'].items():
                 slot=state.get('slots',{}).get(mode,{})
-                if any(slot.get(k)!=v for k,v in expected.items()):raise ValueError('Completed ZIPs changed. Run a new backup before mirroring.')
+                if any(slot.get(k)!=v for k,v in expected.items()):raise BackupIntegrityError('Completed ZIPs changed. Run a new backup before mirroring.')
             if not self.ready(config):raise ValueError('Google Drive is unavailable. Local ZIPs are ready; delivery will retry when the destination returns.')
             self.deliver(config,state,pending['modes'])
             state.update(baseline=state['local_baseline'],baseline_destination=delivery,last_fingerprint=pending['fingerprint'],last_success=time.time())
@@ -480,6 +519,7 @@ class BackupManager:
             pending['attempts']=pending.get('attempts',0)+1;pending['error']=str(error)
             pending['retry_at']=time.time()+min(21600,60*2**min(pending['attempts'],9))
             if isinstance(error,InterruptedError) and not self.scheduled and not self.stop.is_set():pending['paused']=True
+            if isinstance(error,BackupIntegrityError):pending.update(paused=True,needs_rebuild=True)
             save_private(self.state_path,state);raise
     def cleanup(self,config=None,state=None,modes=None):
         if config is None and self.status()['running']:raise ValueError('Wait for the current backup or import before cleaning up ZIPs.')
@@ -518,6 +558,10 @@ class BackupManager:
                     for index,p in enumerate(documents):
                         self.check();self.update(phase='Integrating conversations',done=index+1,total=len(documents),current=p.name)
                         for item in self.archive.read_items(p):
+                            if p.suffix.lower()=='.jsonl':
+                                from native_codex import session_header,conversation_metadata
+                                native=session_header(p)
+                                self.archive.register_manifest(dict(id=item['id'],json=p.name,chat_kind='codex',title=item['title'],**conversation_metadata(native)),p.parent/'native-codex-index.json',root)
                             source_meta=by_path.get(str(p),(exporter_meta.get(item['id'],{}),None))[0]
                             if source_meta:
                                 item['id']=source_meta['id']
@@ -528,6 +572,10 @@ class BackupManager:
                             meta=next((c for c in saved if c.get('id')==item['id']),saved[0] if p.suffix.lower()=='.md' and len(saved)==1 else None)
                             if meta:
                                 item.update({k:meta[k] for k in ('id','title','url','created','updated','kind','project') if meta.get(k) is not None})
+                                if item['kind']=='codex' and p.suffix.lower() in ('.md','.json'):
+                                    from native_codex import conversation_metadata
+                                    entry=dict(id=item['id'],chat_kind='codex',title=item['title'],**conversation_metadata(meta));entry['markdown' if p.suffix.lower()=='.md' else 'json']=p.name
+                                    self.archive.register_manifest(entry,p.parent/'restored-codex-index.json',root)
                             old=catalog.get(item['id']);new_count=len(item['messages'])
                             upgrade=old and Path(old.get('path','')).suffix.lower()=='.md' and p.suffix.lower()=='.json'
                             if old and (old.get('updated',0)>(item.get('updated') or 0) or old.get('updated',0)==(item.get('updated') or 0) and old.get('count',0)>=new_count and not upgrade):
@@ -537,7 +585,7 @@ class BackupManager:
                     if restore_settings and (root/'viewer-settings.json').exists():
                         values=json.loads((root/'viewer-settings.json').read_text(encoding='utf-8'))
                         if values.get('schema')!='offline-chat-viewer/v1':raise ValueError('The archive contains an unrecognized settings backup.')
-                        allowed=('categories','groupOrder','groupSort','sort','group','type','kindOverrides','theme','accent','bg','side','text','fontSize','width','showProjects','showDates','sidebarWidth','sidebarDates','catalogFilters','readChats','rememberPosition','positions','lastChat','pageSize','autoRefresh','rescanIntervalMinutes','collapsed','closedGroups')
+                        allowed=('categories','groupOrder','groupSort','sort','group','type','kindOverrides','theme','accent','bg','side','text','fontSize','width','showProjects','showDates','sidebarWidth','sidebarDates','catalogFilters','readChats','rememberPosition','positions','lastChat','pageSize','autoRefresh','rescanIntervalMinutes','collapsed','closedGroups','sidebarLayout','hideSubagents')
                         self.archive.save_settings({k:v for k,v in values.get('settings',{}).items() if k in allowed});self.archive.organize_many(values.get('organization',[]))
                     if self.archive.ui_cache is not None:
                         catalog=self.archive.catalog()

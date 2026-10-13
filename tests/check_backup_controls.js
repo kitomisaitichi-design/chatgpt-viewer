@@ -1,0 +1,10 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict'),ctx={window:{}};vm.createContext(ctx);vm.runInContext(fs.readFileSync('web/backup-view-model.js','utf8'),ctx);const m=ctx.window.BackupViewModel;
+assert.equal(m.bytes(0),'0 B');assert.equal(m.bytes(2048),'2.00 KB');assert.equal(m.bytes(1024**3),'1.00 GB');
+let s=m.state({running:false,progress:{phase:'Copying stopped'},files:{full:{exists:true,verified:true}}});assert.equal(s.busy,false);assert.equal(s.local,'Verified ZIP available');
+s=m.state({delivery_pending:true,retry_error:'Checksum mismatch',files:{full:{integrity:'changed'}}});assert.equal(s.broken,true);assert.equal(s.error,'Checksum mismatch');assert.equal(s.delivery,'Rebuild before delivery');
+s=m.state({delivery_pending:true,retry_paused:true,files:{full:{exists:true,verified:true}},last_local:100});assert.equal(s.local,'Verified ZIP available');assert.equal(s.delivery,'Paused');
+assert.equal(m.state({running:true}).busy,true);assert.equal(m.state({files:{full:{integrity:'missing'}}}).local,'Needs rebuild');
+assert.equal(m.progress({phase:'Selected ZIP ready',done:1,total:1}),'100%');assert.equal(m.progress({phase:'Packaging full backup',done:1024,total:2048}),'50% · 1.00 KB / 2.00 KB');
+assert.equal(m.state({needs_delivery_approval:true,delivery_pending:true}).delivery,'Review rebuilt ZIPs');
+console.log('Backup controls: readable sizes, authoritative running state, separate local/delivery health and persisted integrity errors passed.');

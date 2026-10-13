@@ -1,0 +1,12 @@
+.backup-health{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}
+.backup-health>div{padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--panel);min-width:0}
+.backup-health strong,.backup-health small{display:block}.backup-health small{color:var(--muted);font-size:11px;margin-top:4px}
+.backup-health.attention>div:first-child{border-color:#e8ad5b80}
+.backup-dialog #backup-current,.backup-dialog #backup-message,.backup-dialog #backup-queue,.backup-dialog #backup-saved-location{overflow-wrap:anywhere}
+.backup-dialog #backup-missing div{max-height:220px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+.selected-backup-dialog{width:min(640px,calc(100vw - 24px));max-height:85vh;overflow:auto}
+.selected-backup-formats{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}
+#selected-backup-chat-list{max-height:230px;overflow:auto;overflow-wrap:anywhere;padding-left:22px}
+.selected-backup-receipt{display:flex;flex-wrap:wrap;gap:4px 12px;padding:8px 0;border-top:1px solid var(--border)}
+.selected-backup-receipt small{color:var(--muted)}
+@media(max-width:640px){.backup-health{grid-template-columns:1fr}.selected-backup-dialog .dialog-actions{flex-wrap:wrap}}

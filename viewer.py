@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.34'
+VERSION = '1.1.35'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -1552,9 +1552,15 @@ class Handler(BaseHTTPRequestHandler):
             if url.path=='/api/backup/folders':self.send({'folders':self.server.backup.drive.folders(q.get('parent','root'))});return
             if url.path=='/api/backup/download':
                 if q.get('mode') not in ('full','progress'):raise ValueError('Choose a full or progress backup.')
-                path=self.server.backup.local_path(q['mode'])
+                path=self.server.backup.download_path(q['mode'])
                 with path.open('rb') as file:
                     self.send_response(200);self.send_header('Content-Type','application/zip');self.send_header('Content-Length',str(path.stat().st_size));self.send_header('Content-Disposition','attachment; filename="'+path.name+'"');self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.end_headers()
+                    while part:=file.read(128*1024):self.wfile.write(part)
+                return
+            if url.path=='/api/backup/selected/download':
+                path=self.server.backup.selected_download(q.get('id',''))
+                with path.open('rb') as file:
+                    self.send_response(200);self.send_header('Content-Type','application/zip');self.send_header('Content-Length',str(path.stat().st_size));self.send_header('Content-Disposition','attachment; filename="'+path.name+'"');self.send_header('Cache-Control','no-store');self.end_headers()
                     while part:=file.read(128*1024):self.wfile.write(part)
                 return
             if url.path=='/api/thread-images':
@@ -1745,6 +1751,10 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path=='/api/codex/discover':
                 a.save_settings({'nativeCodexEnabled':True});self.send(self.server.native.start());return
             elif self.path=='/api/backup/config':self.send(self.server.backup.save_config(d));return
+            elif self.path=='/api/backup/selected/preview':
+                from selected_backup import preview
+                self.send(dict(preview(a,d.get('ids'),d.get('formats')),destination=self.server.backup.config()['local_folder']));return
+            elif self.path=='/api/backup/selected/run':self.send(self.server.backup.start_selected(d.get('ids'),d.get('formats'),d.get('destination')));return
             elif self.path=='/api/backup/open-local':self.send(self.server.backup.open_local(d.get('path')));return
             elif self.path=='/api/backup/client':self.send(self.server.backup.drive.configure(d));return
             elif self.path=='/api/backup/connect':self.send(self.server.backup.drive.connect());return

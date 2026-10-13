@@ -11,7 +11,7 @@ window.ConversationTools=(()=>{
   $('selection-count').textContent=selected.size+' selected'+(hidden?' · '+hidden+' hidden':'');
   $('selection-actions').hidden=!selecting&&!selected.size;$('selection-start').textContent=selecting?'Finish selecting':'Select chats';$('selection-start').setAttribute('aria-pressed',String(selecting));
   for(const id of ['selection-all','selection-invert'])$(id).disabled=!ids.length||S.sidebarRendering;
-  $('selection-clear').disabled=!selected.size;$('selection-delete').disabled=!selected.size||staging;
+  $('selection-backup').disabled=!selected.size; $('selection-clear').disabled=!selected.size;$('selection-delete').disabled=!selected.size||staging;
   const list=agents();$('selection-subagents').textContent='Select subagents ('+list.length+')';$('selection-subagents').disabled=!list.length||staging;
   for(const row of $('chat-list').querySelectorAll('.chat-row'))paint(row);
  }
@@ -41,7 +41,7 @@ window.ConversationTools=(()=>{
   check.onchange=safeRun(async()=>{const saving=saveSetting('hideSubagents',check.checked);renderSidebar();await saving;});
   main.append(button('selection-start','Select chats',()=>{selecting=!selecting;update();}),button('selection-subagents','Select subagents',()=>{selected=new Set(agents().map(c=>c.id));anchor=null;selecting=true;update();}),hide);
   const actions=el('div','selection-actions');actions.id='selection-actions';actions.hidden=true;const count=el('span','','0 selected');count.id='selection-count';count.setAttribute('role','status');
-  actions.append(count,button('selection-all','All visible',()=>{selected=new Set(visible());anchor=null;update();}),button('selection-invert','Invert visible',()=>{selected=ConversationSelectionModel.invert(selected,visible());anchor=null;update();}),button('selection-clear','Clear',()=>{selected.clear();anchor=null;update();}),button('selection-delete','Queue deletion…',stage));
+  actions.append(count,button('selection-all','All visible',()=>{selected=new Set(visible());anchor=null;update();}),button('selection-invert','Invert visible',()=>{selected=ConversationSelectionModel.invert(selected,visible());anchor=null;update();}),button('selection-clear','Clear',()=>{selected.clear();anchor=null;update();}),button('selection-backup','Back up selected…',()=>SelectedBackup.open([...selected])),button('selection-delete','Queue deletion…',stage));
   const hint=el('small','selection-hint','Ctrl-click toggles · Shift-click selects a range');main.title='Select subagents includes matching hidden subagents. All visible and Invert visible use displayed rows only.';bar.append(main,actions,hint);$('chat-list').before(bar);
   $('chat-list').addEventListener('click',e=>{const b=e.target.closest('.chat-row > button:first-child');if(!b)return;const row=b.closest('.chat-row'),modified=e.ctrlKey||e.metaKey||e.shiftKey||selecting;
    if(modified){e.preventDefault();e.stopImmediatePropagation();if(S.sidebarRendering)return;const result=ConversationSelectionModel.click(selected,anchor,visible(),row.dataset.id,{ctrl:e.ctrlKey||e.metaKey,shift:e.shiftKey,toggle:selecting});selected=result.selected;anchor=result.anchor;update();}

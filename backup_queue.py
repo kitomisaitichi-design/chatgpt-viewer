@@ -21,14 +21,14 @@ class BackupQueue:
     def read(self):
         return json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {'pending':[]}
     def write(self,state):atomic_bytes(self.path,json.dumps(state).encode(),private=True)
-    def push(self,kind,upload=True,scheduled=False):
+    def push(self,kind,upload=True,scheduled=False,**details):
         with self.locked():
             state=self.read();pending=state.setdefault('pending',[])
-            job=next((j for j in pending if j['kind']==kind and j['upload']==bool(upload)),None)
+            job=next((j for j in pending if j['kind']==kind and j['upload']==bool(upload) and all(j.get(k)==v for k,v in details.items())),None)
             if job:
                 job['scheduled']&=bool(scheduled)
                 if not scheduled:job['at']=time.time()
-            else:pending.append(dict(kind=kind,upload=bool(upload),scheduled=bool(scheduled),at=time.time()))
+            else:pending.append(dict(kind=kind,upload=bool(upload),scheduled=bool(scheduled),at=time.time(),**details))
             self.write(state)
     def claim(self,eligible):
         with self.locked():
@@ -37,7 +37,7 @@ class BackupQueue:
             pending=state.setdefault('pending',[])
             if job:
                 state.pop('active',None)
-                old=next((j for j in pending if j['kind']==job['kind'] and j['upload']==job['upload']),None)
+                old=next((j for j in pending if j['kind']==job['kind'] and j['upload']==job['upload'] and all(j.get(k)==job.get(k) for k in ('ids','formats','destination'))),None)
                 if old:old['scheduled']&=job['scheduled']
                 else:pending.insert(0,job)
                 self.write(state)
