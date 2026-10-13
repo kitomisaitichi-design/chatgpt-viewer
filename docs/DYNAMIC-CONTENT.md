@@ -1,8 +1,12 @@
 # Saved dynamic content
 
-The Viewer renders saved data locally. Version 1.1.31 extends its existing Chart, flowchart, table, image-collection and card renderers; ordinary code examples remain literal.
+The Viewer renders saved data locally. Versions 1.1.31–1.1.32 extend its existing Chart, flowchart, table, image-collection and card renderers; ordinary code examples remain literal.
 
 ## New supported components
+
+- `table`, `data-table` or `Table content={...}`: supplied rows and labels become a locally sortable/filterable table with a Copy button. Sorting cycles through ascending, descending and original order. Copy exports all matching rows as TSV. Large tables page through 100 rows at a time instead of constructing the entire DOM at once; previews above 64 columns retain their full source with a visible note.
+- `newspaper`, `columns`, `column`, `article`, `section`, `panel`, `stack`, `heading`, `paragraph`: responsive mixed layouts with multiple reading columns on desktop and one column at narrow widths. Columns can contain text, tables, bars, charts and controls.
+- `status`, `status-badge`, `icon`, and inline `[OK]`, `[WARN]`, `[FAIL]`, `[PENDING]` and similar labels inside structured content: preserve the actual words/symbols and apply theme-aware semantic colors. Explicit text/badge colors are also retained. Static statuses do not pretend to be live operation results.
 
 - `bar`, `meter`, `progress`, `progress-bar`: thin horizontal tracks with supplied labels, values, limits, units, colors and qualitative captions. Missing or nonnumeric values remain readable without inventing a score or animating a fake loading state.
 - `comparison`, `bars`: grouped labeled comparisons, responsive to the reading width.
@@ -26,6 +30,11 @@ For example:
   <tab title="Summary"><copy label="Example" text="Reusable saved text"/></tab>
   <tab title="Details"><accordion title="Notes"><text>Saved notes</text></accordion></tab>
 </tabs>
+
+<newspaper columns={2}>
+  <article><heading>Findings</heading><paragraph>[OK] Arbitrary saved text ✓</paragraph></article>
+  <column><Table content={{"columns":["Name","Status"],"rows":[{"Name":"Example","Status":"[OK]"}]}}/></column>
+</newspaper>
 ```
 
 These are supported Viewer examples, not a claim that every ChatGPT model exports all these tag names. A bounded sample of recent saved conversations confirmed nested Chart components and layout sizing attributes. The additional bar/control primitives are tested with synthetic fixtures and the user's visual reference; exact serialization may vary between exports.

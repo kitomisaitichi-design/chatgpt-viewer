@@ -6,6 +6,7 @@ class Element{
  set textContent(v){this._text=String(v);this.children=[];}
  get textContent(){return this._text+this.children.map(c=>c.textContent).join('');}
  append(...children){this.children.push(...children);}
+ replaceChildren(...children){this.children=children;this._text='';}
  setAttribute(k,v){this.attributes[k]=String(v);}
  getAttribute(k){return this.attributes[k];}
  removeAttribute(k){delete this.attributes[k];}
@@ -37,10 +38,21 @@ const unknown=render('<box><future-panel><text>Keep the content</text></future-p
 assert(unknown.textContent.includes('Keep the content'));assert.equal(find(unknown,e=>e.tagName==='button')[0].disabled,true);
 const details=render('<accordion title="Notes" open><text>Remember this</text></accordion>').children[0];
 assert.equal(details.open,true);assert(details.textContent.includes('Remember this'));
+const newspaper=render('<newspaper columns={2}><article><heading>One</heading><text>[OK] Arbitrary ✓ text</text></article><column><status color="green" label="[OK]"/><status state="warning">[WARN]</status></column></newspaper>');
+assert.equal(newspaper.children[0].style['--rich-dil-columns'],'2');assert(newspaper.textContent.includes('Arbitrary ✓ text'));assert.equal(find(newspaper,e=>e.className==='rich-dil-status rich-dil-status-ok').length,2);
+const tableSpec={columns:[{key:'name',label:'Name'},{key:'value',label:'Value'},{key:'status',label:'Status'}],rows:[{name:'Beta',value:20,status:'[WARN]'},{name:'Alpha',value:3,status:'[OK]'}]};
+const dataTable=render('<Table content={'+JSON.stringify(tableSpec)+'}/>'),tableBody=find(dataTable,e=>e.tagName==='tbody')[0],sortButtons=find(dataTable,e=>e.className==='rich-dil-sort'),filter=find(dataTable,e=>e.tagName==='input')[0];
+assert(tableBody.textContent.includes('Beta20[WARN]'),'JSON table values render');sortButtons[1].onclick();assert.equal(tableBody.children[0].textContent,'Alpha3[OK]','Numeric sorting uses saved values');sortButtons[1].onclick();assert.equal(tableBody.children[0].textContent,'Beta20[WARN]');
+filter.value='alpha';filter.oninput();assert.equal(tableBody.children.length,1);filter.value='nothing';filter.oninput();assert.equal(tableBody.children.length,0);filter.value='';filter.oninput();assert.equal(tableBody.children.length,2);
+const richTable=render('<table><table-row header><table-cell>Name</table-cell><table-cell>State</table-cell></table-row><table-row><table-cell>[Example](https://example.com)</table-cell><table-cell><status state="ok" label="[OK]"/></table-cell></table-row></table>');
+assert(richTable.textContent.includes('Example'));assert(richTable.textContent.includes('[OK]'));
+const paged=render('<data-table content={'+JSON.stringify({columns:['value'],rows:Array.from({length:205},(_,i)=>({value:i}))})+'}/>'),pagedBody=find(paged,e=>e.tagName==='tbody')[0],next=find(paged,e=>e.tagName==='button'&&e.textContent==='Next')[0];
+assert.equal(pagedBody.children.length,100);next.onclick();assert.equal(pagedBody.children[0].textContent,'100');next.onclick();assert.equal(pagedBody.children.length,5);
 (async()=>{
  const block=render('<copy label="Example" text={'+JSON.stringify('line one\nline two')+'}/>'),button=find(block,e=>e.tagName==='button')[0];
  const first=button.onclick();await button.onclick();assert.equal(writes.length,1,'Repeated activation has one pending clipboard write');pending();await first;
  assert.equal(writes[0],'line one\nline two');assert.equal(button.dataset.busy,undefined);assert.equal(toasts.at(-1),'Copied');
  rejectCopy=true;await button.onclick();assert.match(toasts.at(-1),/Copy unavailable/,'Failure is visible instead of a false success');
+ rejectCopy=false;filter.value='alpha';filter.oninput();const tableCopy=find(dataTable,e=>e.tagName==='button'&&e.textContent==='Copy')[0],copying=tableCopy.onclick();pending();await copying;assert.equal(writes.at(-1),'Name\tValue\tStatus\nAlpha\t3\t[OK]','Table copy retains labels and all matching data');
  console.log('Dynamic controls: saved ranges, qualitative labels, layout attributes, safe fallbacks, tabs/keyboard, disclosures, copy and repeated activation passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});
