@@ -1,6 +1,8 @@
 # Conversation selection and folders
 
-Click a chat to read it. Ctrl-click (or Command-click) toggles individual selections without opening them. Shift-click selects the range between the last clicked chat and the clicked row, in the current displayed order. Ctrl+Shift adds a range. Select chats enables click-to-toggle selection without a keyboard; Finish selecting returns to ordinary opening. Escape clears selection outside inputs and dialogs.
+Click a chat to read it. Ctrl-click (or Command-click) toggles individual selections without opening them. Shift-click selects the range between the last clicked chat and the clicked row, in the current displayed order. Ctrl+Shift adds a range. **Select chats** enables click-to-toggle selection without a keyboard; **Done selecting** returns to ordinary opening.
+
+The sidebar uses a single compact row: **Select chats** and **Tools** (which shows the current selected count). Tools opens a draggable, resizable panel containing All visible, Invert visible, Clear, Select subagents, Hide subagents, Back up selected and Queue deletion. Drag its heading to reposition it; resize from its lower corner. Click outside or press Escape to close the panel without clearing the selected chats. With the panel closed, Escape clears selection outside inputs and other dialogs.
 
 All visible and Invert visible operate on the currently displayed rows, including the current search, type, filters, collapsed groups and Show more limits. Invert replaces the selection with the visible complement. The selected count explicitly reports selected chats that are hidden. Changing filters removes selections outside the matching scope. Selection resets on refresh; no deletion starts automatically.
 
