@@ -64,4 +64,30 @@
 .rich-dil-layout .rich-dil-table :is(th,td){padding:9px 11px;text-align:left;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
 .rich-dil-layout .rich-dil-table th{font-weight:650;color:var(--text)}
 .rich-dil-layout .widget-source{margin-top:12px}
+.rich-dil-layout :is(.rich-dil-bars,.rich-dil-comparison){display:flex;flex-direction:column;gap:12px}
+.rich-dil-meter-row{display:flex;flex-direction:column;gap:7px;margin:5px 0 12px;min-width:0}
+.rich-dil-meter-heading{display:flex;justify-content:space-between;align-items:baseline;gap:16px;font-size:14px;line-height:1.45}
+.rich-dil-meter-label{font-weight:650;overflow-wrap:anywhere}
+.rich-dil-meter-value{color:var(--muted);text-align:right;flex-shrink:0;max-width:50%;overflow-wrap:anywhere}
+.rich-dil-meter-track{width:100%;height:5px;background:color-mix(in srgb,var(--text) 13%,var(--bg));border-radius:99px;overflow:hidden}
+.rich-dil-meter-fill{display:block;height:100%;border-radius:inherit;background:var(--accent)}
+.rich-dil-layout .rich-dil-copyable{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--panel);margin:8px 0}
+.rich-dil-control-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 12px;border-bottom:1px solid var(--border);font-size:12px}
+.rich-dil-control{font:inherit;font-size:12px;padding:5px 12px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--text);cursor:pointer}
+.rich-dil-control:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.rich-dil-control:disabled{opacity:.55;cursor:default}
+.rich-dil-layout .rich-dil-copyable pre{margin:0;padding:12px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:transparent;font-size:13px}
+.rich-dil-copyable code{background:transparent;padding:0}
+.rich-dil-tabs{min-width:0;margin:10px 0}
+.rich-dil-tab-list{display:flex;gap:5px;border-bottom:1px solid var(--border);overflow-x:auto;padding:0 0 8px;scrollbar-width:thin}
+.rich-dil-tab{flex-shrink:0;border:1px solid transparent;border-radius:8px;padding:7px 13px;background:transparent;color:var(--muted);font-size:13px;cursor:pointer}
+.rich-dil-tab[aria-selected="true"]{background:color-mix(in srgb,var(--accent) 13%,var(--bg));border-color:color-mix(in srgb,var(--accent) 35%,var(--border));color:var(--text)}
+.rich-dil-tab-panel{padding:12px 0;min-width:0}
+.rich-dil-tab-panel[hidden]{display:none!important}
+.rich-dil-disclosure{margin:8px 0;border:1px solid var(--border);border-radius:10px;background:transparent;overflow:hidden}
+.rich-dil-disclosure>summary{padding:10px 13px;cursor:pointer;font-size:13px;font-weight:600}
+.rich-dil-disclosure-body{padding:0 13px 12px}
+.rich-dil-unknown{min-width:0;overflow-wrap:anywhere}
+.rich-dil-layout :is(.rich-dil-control,.rich-dil-tab,.rich-dil-disclosure>summary):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.rich-dil-layout :is(.rich-dil-bars,.rich-dil-comparison) .rich-dil-meter-row:last-child{margin-bottom:0}
 @media(max-width:650px){.rich-dil-layout :is(.rich-dil-grid,.rich-dil-flow){grid-template-columns:repeat(1,minmax(0,1fr))}.rich-diagram-modal-toolbar{flex-wrap:wrap}.rich-diagram-modal{padding:10px}}

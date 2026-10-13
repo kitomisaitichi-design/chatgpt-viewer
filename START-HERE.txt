@@ -1,4 +1,4 @@
-OFFLINE CHAT VIEWER v1.1.30
+OFFLINE CHAT VIEWER v1.1.31
 
 1. Right-click the downloaded ZIP > Properties > Unblock > Apply, if shown.
    Then extract this ENTIRE ZIP into a normal folder near your saved chat exports.

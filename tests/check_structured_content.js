@@ -51,7 +51,9 @@ assert.equal(value.widgets[0].chart.meta.title,'Cross-basis genomic distance cor
 assert(value.text.includes('Kernel-balanced correlations.'));
 const newSeries={...content,xKey:'Epoch',data:[{Epoch:'A',cognitive:12,technical:-10,homicide:4},{Epoch:'B',cognitive:17,technical:-5,homicide:9}],yAxisMin:-12,yAxisMax:20};
 assert.equal(extract('<Chart content={'+JSON.stringify(newSeries)+'}/>').widgets[0].chart.data[0].technical,-10);
-assert.equal(extract('<Chart content={{"chartType":"line","data":[} />').widgets.length,0);
+const brokenChart='<Chart content={{"chartType":"line","data":[} />';
+assert(!extract(brokenChart).widgets.some(w=>w.chart),'Malformed charts never become executable or drawn data');
+assert.equal(extract(brokenChart).widgets[0].unavailable.raw,brokenChart,'Incomplete chart source remains available');
 const metric='<grid columns={3}><grid-item><box border radius="lg" padding={3}><text size="xs" color="secondary">Genomic references</text><title size="lg">52</title><text size="sm">2,601 sampled genomes across seven reference spaces</text></box></grid-item><grid-item><box><text size="xs">Country output observations</text><title>28</title><caption>Original 5+5+5+5+5+3 sampling design</caption></box></grid-item><grid-item><box><text size="xs">Cognitive–technical correlation</text><title>0.918</title><text size="sm">Across the 28 constructed output coordinates</text></box></grid-item></grid>';
 value=extract('Intro\n\n'+metric+'\n\nThe more revealing decomposition is:');
 assert.equal(value.widgets.length,1);
@@ -81,4 +83,27 @@ assert.equal(value.widgets.find(w=>w.downloads).downloads[0].layout.children[1].
 assert(value.text.includes('After these files.'));
 const nestedLink=extract('<box><Link url="https://example.com/report.xlsx" title="Research sheet"/><caption>Details below.</caption></box>');
 assert.equal(nestedLink.widgets[0].layout.children[0].attrs.title,'Research sheet');
+// New declarative primitives must not make their surrounding layout vanish.
+const comparisons='<box><title>Comparison</title><progress label="Visual consistency" value={98} max={100} valueLabel="Very strong" color="pink"/><progress label="Not measured" valueLabel="Not established"/><caption>Qualitative illustration, not a measurement.</caption></box>';
+assert.equal(extract(comparisons).widgets.length,1,'Progress bars must preserve the surrounding layout');
+const controls='<tabs><tab title="Summary"><copy text="Reusable example"/><button action="copy" value="Another example">Copy example</button></tab><tab title="Details"><accordion title="Notes"><text>Saved notes</text></accordion></tab></tabs>';
+assert.equal(extract(controls).widgets.length,1,'Tabs, disclosures and copy controls should be recognized');
+const nestedChart='<grid columns={2}><box><Chart content={'+JSON.stringify(content)+'}/></box><box><meter min={-10} max={10} value={-5}/></box></grid>';
+const chartLayout=extract(nestedChart).widgets[0]?.layout;
+assert.equal(chartLayout?.children[0].children[0].chart.data[1].technical,.30977,'Nested charts retain their original data');
+const future=extract('<box><future-summary priority="new"><text>Retain this label</text></future-summary><text>Retain this sibling</text></box>');
+assert.equal(future.widgets.length,1,'An unknown child should preserve known siblings and source');
+assert.equal(future.widgets[0].layout.children[0].type,'future-summary');
+for(const sample of [comparisons,controls,nestedChart]){
+ assert.equal(extract('```jsx\n'+sample+'\n```').widgets.length,0,'Literal code stays literal');
+}
+const malformed='<box><text>Retained malformed content</box>\nFollowing prose';
+const fallback=extract(malformed);
+assert(fallback.widgets[0].unavailable.raw.includes('Retained malformed content'));
+assert(fallback.text.includes('Following prose'));
+assert.equal(extract('<tabs selected={1}><tab title="First"/><tab title="Second"/></tabs>').widgets[0].layout.attrs.selected,'1');
+const copyWithDelimiters='<copy text={'+JSON.stringify('Use `code` or ```literal fences``` safely')+'}/>';
+assert.equal(extract(copyWithDelimiters).widgets[0].layout.attrs.text,'Use `code` or ```literal fences``` safely');
+assert.equal(extract('<copy>Use `code` safely</copy>').widgets[0].layout.children[0],'Use `code` safely');
 console.log('Saved DIL charts, responsive metric cards/subtext, tables, evolving directional graphs and code exclusions passed.');
+require('./check_dynamic_content.js');

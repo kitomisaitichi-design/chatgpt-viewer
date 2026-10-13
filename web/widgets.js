@@ -91,7 +91,7 @@ window.SavedWidgets=(()=>{
   iframe.onload=()=>iframe._wasConnected=true;card.append(iframe,n('p','widget-footer','Saved interactive app · runs locally'));source(card,content,'html','App source');return card;
  }
  function render(value,context={}){try{if(value.image_group)return RichMedia.group(value.image_group,context);if(value.charts_widget_v2){const spec=value.charts_widget_v2.content;return chart(typeof spec==='string'?JSON.parse(spec):spec||{});}if(value.chart)return chart(value.chart);if(value.diagram)return StructuredContent.diagram(value.diagram,source);if(value.downloads){const group=n('section','saved-widget rich-dil-download-list');for(const item of value.downloads)group.append(StructuredContent.layoutRender(item.layout,null,item.source,context));return group;}if(value.layout)return StructuredContent.layoutRender(value.layout,source,value.source,context);if(value.app_block)return application(value.app_block,context);}catch(error){const card=n('section','saved-widget');card.append(n('strong','','Saved widget'),n('p','muted','The saved widget could not be drawn. Its source is available below.'));source(card,value);return card;}
-  const card=n('section','saved-widget');card.append(n('strong','',value.unavailable?.title||'Saved widget'));if(!value.unavailable)source(card,value);return card;
+  const card=n('section','saved-widget');card.append(n('strong','',value.unavailable?.title||'Saved widget'));if(value.unavailable?.raw)source(card,value.unavailable.raw,'jsx');else if(!value.unavailable)source(card,value);return card;
  }
  return {extract,render};
 })();

@@ -16,7 +16,7 @@
 
 Read, search and organize saved **ChatGPT, ChatGPT Work and Codex** conversations in a familiar local interface. Explore branches, documents, images and media; keep your place; organize your archive; and back it up without sending your chats to a hosted reader.
 
-**Latest update — v1.1.30:** Modern ChatGPT chart, graph and layout rendering; reliable deletion of older conversations already missing online; faster, clearer deletion queues; and native Codex file removal without closing unrelated Codex sessions. [Read the v1.1.30 changes](release-notes/v1.1.30.md).
+**Latest update — v1.1.31:** Labeled comparison and progress bars, copyable content, keyboard-accessible tabs and disclosures, charts nested inside grids/cards, and better preservation of newer saved layouts. [Read the v1.1.31 changes](release-notes/v1.1.31.md) · [Supported dynamic content](docs/DYNAMIC-CONTENT.md).
 
 The Windows download includes **Python and offline rendering assets**. Standard reading needs no installer, subscription, API key, CDN or package setup. Optional online features remain under your control.
 
