@@ -4,9 +4,11 @@
 window.SavedWidgets=(()=>{
  const n=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=String(text);return e;};
  const colors=['#5297ee','#59b56b','#ee8b43','#bd84ea','#ed6e8a','#48babe'],frames=new Map();
+ const parsedCache=new Map();let parsedBytes=0;
+ const freeze=value=>{const queue=[value];while(queue.length){const item=queue.pop();if(item&&typeof item==='object'&&!Object.isFrozen(item)){Object.freeze(item);for(const child of Object.values(item))if(child&&typeof child==='object')queue.push(child);}}return value;};
  window.addEventListener('message',event=>{const frame=frames.get(event.data?.viewerFrame);if(!frame)return;if(!frame.isConnected){frames.delete(event.data.viewerFrame);return;}if(event.source!==frame.contentWindow)return;const height=Number(event.data.height);if(Number.isFinite(height))frame.style.height=Math.max(320,Math.min(5000,height+36))+'px';});
  const svgNode=(tag,attrs,text)=>{const e=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [key,value] of Object.entries(attrs||{}))e.setAttribute(key,String(value));if(text!==undefined)e.textContent=String(text);return e;};
- function extract(text){text=window.RichMedia.blocks(text);const widgets=[];text=text.replace(/\ue200(genui|image_group)\ue202([\s\S]*?)\ue201/g,(raw,type,json,offset)=>{
+ function extract(text){const original=text;if(parsedCache.has(original)){const entry=parsedCache.get(original);parsedCache.delete(original);parsedCache.set(original,entry);return entry.value;}text=window.RichMedia.blocks(text);const widgets=[];text=text.replace(/\ue200(genui|image_group)\ue202([\s\S]*?)\ue201/g,(raw,type,json,offset)=>{
   // Literal examples inside fenced code remain literal examples.
   let fence='';for(const line of text.slice(0,offset).split('\n')){const m=line.match(/^\s*(`{3,}|~{3,})/);if(m){if(!fence)fence=m[1][0];else if(fence===m[1][0])fence='';}}if(fence)return raw;
   try{const spec=JSON.parse(json),w=type==='image_group'?{image_group:spec}:spec;if(w.citation)return raw;return 'OFFLINEWIDGETPLACEHOLDER'+(widgets.push(w)-1)+'END';}
@@ -30,7 +32,9 @@ window.SavedWidgets=(()=>{
     return 'OFFLINEWIDGETPLACEHOLDER'+(widgets.push({downloads:[...(left.downloads||[left]),right]})-1)+'END';
    });
   }
-  return window.RichMedia.combine(text,widgets);}
+  const result=window.RichMedia.combine(text,widgets);
+  if(original.length<=262144){const bytes=original.length*2+JSON.stringify(result).length*2;if(bytes<=4*1024*1024){parsedCache.set(original,{value:freeze(result),bytes});parsedBytes+=bytes;while(parsedCache.size>24||parsedBytes>8*1024*1024){const [key,entry]=parsedCache.entries().next().value;parsedCache.delete(key);parsedBytes-=entry.bytes;}}}
+  return result;}
  function source(card,value,language='json',label='Saved source'){
   const fold=n('details','widget-source'),summary=n('summary','',label),pre=n('pre'),code=n('code');code.className='language-'+language;code.dataset.language=language;code.textContent=typeof value==='string'?value:JSON.stringify(value,null,2);pre.append(code);fold.append(summary,pre);card.append(fold);return fold;
  }

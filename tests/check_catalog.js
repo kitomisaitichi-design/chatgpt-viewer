@@ -26,3 +26,12 @@ order.groups(model.filter(chats,{query:'third'},reads,title),settings,'work','ca
 assert(order.compare(chats[0],chats[2],'title-desc',title)>0);assert(order.compare(chats[0],chats[2],'updated-oldest',title)<0);
 
 console.log('Catalog combined filters, inclusive date boundaries, read revisions, original-title search and layered order checks passed.');
+const titles=[{id:'prefix',title:'Café expedition notes',updated:3},{id:'exact',title:'Café expedition',updated:2},{id:'alias',title:'Original report',alias:'Expedition checklist',updated:1},{id:'hidden',title:'Café expedition',trashed:1}];
+assert.equal(model.lookup(titles,'cafe expedition')[0].cid,'exact','Exact titles outrank longer prefix matches');
+assert.equal(model.lookup(titles,'original report')[0].cid,'alias','Original titles remain searchable after rename');
+assert.equal(model.lookup(titles,'expediton')[0].match,'Similar title','Conservative typo fallback should be labeled');
+assert.equal(model.lookup(titles,'')[0],undefined);
+assert(!model.lookup(titles,'cafe expedition').some(hit=>hit.cid==='hidden'));
+assert.equal(model.lookup([{id:'loose',title:'Planetary long research',updated:9},{id:'phrase',title:'Branch planet research',updated:1}],'planet research')[0].cid,'phrase','A literal phrase outranks scattered partial words');
+titles[2].alias='Changed alias';assert.equal(model.lookup(titles,'changed alias')[0].cid,'alias','Rename invalidates normalized metadata');
+require('./check_fast_search.js');

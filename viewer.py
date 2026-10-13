@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.32'
+VERSION = '1.1.33'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -966,6 +966,12 @@ class Archive:
         return dict(page_rows(self.source_reader.rows(cid,path,leaf),before,around,limit,details,after),leaf=leaf)
     def search(self,q,mode='smart',cid=None,cids=None):
         if cids is not None and (not cids or cid and cid not in cids):return {'results':[],'mode':mode}
+        if mode=='title':
+            from title_lookup import lookup
+            if self.ui_cache is not None and not self.ui_cache.get('loading'):
+                with self.ui_cache_lock:chats=list(self.ui_cache['chats'].values())
+            else:chats=self.catalog()
+            return lookup(chats,q,cid,cids)
         if mode in ('exact','exact_typo'):
             from phrase_search import phrase_search
             return phrase_search(self,q,mode=='exact_typo',cid,cids)
@@ -1592,10 +1598,11 @@ class Handler(BaseHTTPRequestHandler):
                     overrides=a.settings().get('kindOverrides') or {}
                     scope={c['id'] for c in a.catalog() if not c.get('trashed') and (q.get('type','all')=='all' or canonical_kind(c.get('kind_override') or overrides.get(c['id']) or c['kind'])==q['type']) and (q.get('category','all')=='all' or (c.get('category') or '')==q['category'])}
                 result=a.search(q.get('q',''),q.get('mode','smart'),q.get('id'),scope)
-                with a.connect() as db:
-                    for hit in result['results']:
-                        row=db.execute('SELECT role,time FROM messages WHERE cid=? AND seq=?',(hit['cid'],hit['seq'])).fetchone()
-                        if row:hit.update(dict(row))
+                if q.get('mode')!='title':
+                    with a.connect() as db:
+                        for hit in result['results']:
+                            row=db.execute('SELECT role,time FROM messages WHERE cid=? AND seq=?',(hit['cid'],hit['seq'])).fetchone()
+                            if row:hit.update(dict(row))
                 self.send(result);return
             if url.path=='/api/find':
                 from find_text import conversation_matches

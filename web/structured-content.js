@@ -133,11 +133,11 @@ window.StructuredContent=(()=>{
   // Markdown code, prose, and inline examples must never be interpreted as DIL.
   // Literal delimiters in a saved JSON attribute or copyable block are data,
   // rather than markdown delimiters. Skip intact components before splitting.
-  const parts=[];let begin=0,cursor=0;
+  const parts=[],components=new Map();let begin=0,cursor=0;
   while(cursor<input.length){
    if(input[cursor]==='<'){
     const tag=readTag(input,cursor),component=tag&&!tag.close&&ROOT.test(tag.name)?layout(input,cursor):null;
-    if(component){cursor=component.end;continue;}if(tag){cursor=tag.end;continue;}
+    if(component){components.set(cursor,component);cursor=component.end;continue;}if(tag){cursor=tag.end;continue;}
    }
    const delimiter=input.slice(cursor).match(/^(?:`{3,}|~{3,}|`)/)?.[0];
    if(delimiter){const finish=input.indexOf(delimiter,cursor+delimiter.length),end=finish<0?input.length:finish+delimiter.length;
@@ -145,7 +145,9 @@ window.StructuredContent=(()=>{
    cursor++;
   }
   parts.push(input.slice(begin));
+  let partOffset=0;
   return parts.map((part,i)=>{
+   const base=partOffset;partOffset+=part.length;
    if(i%2){
     const fenced=part.match(/^(?:`{3,}|~{3,})\s*mermaid\s*\r?\n([\s\S]*?)(?:\r?\n(?:`{3,}|~{3,})\s*)?$/i);
     if(fenced){const value=graph(fenced[1].trim());if(value)return '\n'+push({diagram:value})+'\n';}
@@ -157,7 +159,8 @@ window.StructuredContent=(()=>{
     const at=part[m.index]==='\n'?m.index+1:m.index;
     if(at<pos)continue;
     const kind=part[at]==='<'?'jsx':'diagram';
-    const value=kind==='diagram'?graph(part.slice(at).trimStart()):part.slice(at,at+7).toLowerCase().startsWith('<chart')?chart(part,at):layout(part,at);
+    const memo=components.get(base+at);
+    const value=kind==='diagram'?graph(part.slice(at).trimStart()):part.slice(at,at+7).toLowerCase().startsWith('<chart')?chart(part,at):memo?{...memo,end:memo.end-base}:layout(part,at);
    if(!value){
     // Retain malformed saved components as inert source. Do not independently
     // render fragments inside a broken parent or discard them as HTML tags.

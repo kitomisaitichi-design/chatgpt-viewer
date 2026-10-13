@@ -16,7 +16,7 @@
 
 Read, search and organize saved **ChatGPT, ChatGPT Work and Codex** conversations in a familiar local interface. Explore branches, documents, images and media; keep your place; organize your archive; and back it up without sending your chats to a hosted reader.
 
-**Latest update — v1.1.32:** Interactive saved tables with sort, filter and Copy; newspaper-style columns with themed `[OK]` / `[WARN]` statuses; plus labeled bars, copyable content, tabs, disclosures and nested charts. [Read the v1.1.32 changes](release-notes/v1.1.32.md) · [Supported dynamic content](docs/DYNAMIC-CONTENT.md).
+**Latest update — v1.1.33:** Instant local chat-title results with Ctrl+K, original and renamed title matching, keyboard opening and clear typo suggestions. Cached filtering and structured rendering reduce repeat work; subtle panel and control animations respect reduced motion. [Read the v1.1.33 changes](release-notes/v1.1.33.md) · [Search and performance guide](docs/PERFORMANCE.md) · [Supported dynamic content](docs/DYNAMIC-CONTENT.md).
 
 The Windows download includes **Python and offline rendering assets**. Standard reading needs no installer, subscription, API key, CDN or package setup. Optional online features remain under your control.
 

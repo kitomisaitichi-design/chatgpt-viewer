@@ -24,3 +24,34 @@
 
 /* Folder paths remain selectable; quiet status lives inside the active dialog. */
 [hidden]{display:none!important}.path-control{display:flex;align-items:stretch;gap:6px;margin-top:7px;min-width:0}.path-control input{min-width:0;flex:1;margin:0!important}.path-copy{flex:none;width:40px;border:1px solid var(--border);border-radius:10px;color:var(--muted);background:var(--panel);cursor:pointer}.path-copy:hover{color:var(--text);border-color:var(--accent)}.path-copy:focus-visible{outline:2px solid var(--accent)}.backup-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 16px}.backup-toolbar span{color:var(--muted);font-size:12px}.backup-dialog{width:min(1100px,95vw);padding:28px;background:var(--bg)}.backup-dialog .dialog-heading{padding-bottom:12px;border-bottom:1px solid var(--border)}.backup-dialog h2{letter-spacing:-.035em;font-size:25px}.backup-card{padding:22px;background:var(--bg);border-radius:18px}.backup-card h3{font-size:16px}.backup-dialog label,.backup-dialog button,.backup-dialog input:not([type=checkbox]),.backup-dialog select{font-size:13px}.backup-card>p,.backup-import p,.backup-dialog details p,.backup-dialog details{font-size:12px}.backup-schedule{grid-column:1/-1}.backup-schedule .backup-row{max-width:620px}.backup-intro{line-height:1.65;font-size:13px;color:var(--muted)}#backup-feedback{padding:12px 16px;border:1px solid var(--border);border-radius:12px;background:var(--panel);font-size:13px;line-height:1.6;margin:12px 0;overflow-wrap:anywhere}#backup-feedback.error{border-color:#cf6262;color:var(--text)}.saved-location{display:flex;align-items:center;gap:12px}.saved-location p{flex:1;overflow-wrap:anywhere;font-size:12px;color:var(--muted)}.saved-location button{height:36px}.backup-activity{background:var(--panel);border-radius:18px}#backup-current,#backup-message{font-size:13px}.backup-downloads a{font-size:13px}.welcome-actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:28px 0}.welcome-actions button{padding:12px 20px;border:1px solid var(--border);border-radius:12px}.welcome-source{margin:0 auto 24px;max-width:700px;border:1px solid var(--border);border-radius:12px;padding:12px 18px;color:var(--muted);font-size:12px;overflow-wrap:anywhere}#welcome h1{letter-spacing:-.05em;line-height:1.12;font-size:clamp(30px,4vw,48px)}.welcome-cards>div{border-radius:18px;background:var(--panel)}@media(max-width:760px){.backup-dialog{padding:18px}.backup-card{padding:16px}.backup-toolbar span{flex-basis:100%}}
+
+/* Short motion for explicit UI state changes; keep hidden semantics and message rows intact. */
+#search-dialog .search-guidance{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0;font-size:12px;color:var(--muted)}
+#search-contents{font-size:12px;border:1px solid var(--border);border-radius:9px;padding:7px 10px;background:var(--panel);white-space:nowrap}
+.search-pending{color:var(--muted);animation:search-pending-opacity 1.25s ease-in-out infinite}
+@keyframes search-pending-opacity{0%,100%{opacity:.6}50%{opacity:1}}
+@media(prefers-reduced-motion:reduce){.search-pending{animation:none}}
+.search-title-result{display:flex;width:100%;flex-direction:column;gap:5px;text-align:left;background:transparent;border:1px solid transparent;border-radius:11px;padding:12px 14px;margin:3px 0;cursor:pointer}
+.search-title-result strong{font-size:14px;line-height:1.4;font-weight:600;overflow-wrap:anywhere}.search-title-result small{font-size:11px;color:var(--muted)}
+.search-title-result:is(.active,:hover){background:color-mix(in srgb,var(--accent) 8%,var(--panel));border-color:color-mix(in srgb,var(--accent) 30%,var(--border))}
+.search-title-result:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+@media(max-width:650px){#search-dialog .search-guidance{align-items:flex-start;flex-direction:column}.search-input{flex-wrap:wrap}.search-input input{min-width:150px;flex:1}.search-input select{max-width:100%}}
+dialog:not(.document-dialog):not(.image-dialog):not(.wide-table-dialog){opacity:0;transform:translateY(7px) scale(.99);transition:opacity 160ms ease,transform 160ms cubic-bezier(.2,.7,.2,1);transition:opacity 160ms ease,transform 160ms cubic-bezier(.2,.7,.2,1),display 160ms allow-discrete,overlay 160ms allow-discrete}
+dialog:not(.document-dialog):not(.image-dialog):not(.wide-table-dialog)[open]{opacity:1;transform:none}
+dialog:not(.document-dialog):not(.image-dialog):not(.wide-table-dialog)::backdrop{opacity:0;transition:opacity 160ms ease;transition:opacity 160ms ease,display 160ms allow-discrete,overlay 160ms allow-discrete}
+dialog:not(.document-dialog):not(.image-dialog):not(.wide-table-dialog)[open]::backdrop{opacity:1}
+@starting-style{
+ dialog:not(.document-dialog):not(.image-dialog):not(.wide-table-dialog)[open]{opacity:0;transform:translateY(7px) scale(.99)}
+ dialog:not(.document-dialog):not(.image-dialog):not(.wide-table-dialog)[open]::backdrop{opacity:0}
+}
+@keyframes viewer-panel-enter{from{opacity:0;transform:translateY(7px) scale(.99)}to{opacity:1;transform:none}}
+#chat-popover:not([hidden]),#trash-panel:not([hidden]),#inchat-bar:not([hidden]){animation:viewer-panel-enter 150ms cubic-bezier(.2,.7,.2,1) both}
+@keyframes viewer-toast-enter{from{opacity:0;transform:translate(-50%,6px)}to{opacity:1;transform:translate(-50%,0)}}
+#toast:not([hidden]){animation:viewer-toast-enter 150ms ease-out both}
+:where(dialog button,.primary,.secondary,.icon,.path-copy,.nav-action,#top-loader button,#bottom-loader button,#inchat-bar button,.format-status,.math-retry){transition:color 120ms ease,background-color 120ms ease,border-color 120ms ease,opacity 120ms ease,box-shadow 120ms ease,transform 120ms ease}
+:where(dialog button,.primary,.secondary,.icon,.path-copy,.nav-action,#top-loader button,#bottom-loader button,#inchat-bar button,.format-status,.math-retry):active:not(:disabled){transform:scale(.98)}
+@media(prefers-reduced-motion:reduce){
+ dialog:not(.document-dialog):not(.image-dialog):not(.wide-table-dialog),dialog:not(.document-dialog):not(.image-dialog):not(.wide-table-dialog)::backdrop{transition:none!important}
+ #chat-popover:not([hidden]),#trash-panel:not([hidden]),#inchat-bar:not([hidden]),#toast:not([hidden]){animation:none!important}
+ :where(dialog button,.primary,.secondary,.icon,.path-copy,.nav-action,#top-loader button,#bottom-loader button,#inchat-bar button,.format-status,.math-retry){transition:none!important;transform:none!important}
+}

@@ -107,3 +107,7 @@ assert.equal(extract(copyWithDelimiters).widgets[0].layout.attrs.text,'Use `code
 assert.equal(extract('<copy>Use `code` safely</copy>').widgets[0].layout.children[0],'Use `code` safely');
 console.log('Saved DIL charts, responsive metric cards/subtext, tables, evolving directional graphs and code exclusions passed.');
 require('./check_dynamic_content.js');
+const cachedSource='<box><title>Cache original</title><text>Saved value</text></box>',cachedA=extract(cachedSource),cachedB=extract(cachedSource);
+assert.strictEqual(cachedA,cachedB,'Repeated formatting reuses parsed immutable data');
+assert(Object.isFrozen(cachedA.widgets[0].layout),'Cached layout data cannot be changed by one rendered copy');
+assert.notStrictEqual(extract(cachedSource.replace('Saved value','New value')),cachedA,'Updated source cannot reuse stale parsed data');

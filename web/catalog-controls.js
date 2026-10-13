@@ -28,8 +28,8 @@ window.CatalogControls=(()=>{
  }
  function bind(){
   bindResize();
-  $('catalog-query').oninput=()=>{query=$('catalog-query').value;clearTimeout(timer);timer=setTimeout(renderSidebar,100);};
-  $('catalog-query').onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();query='';$('catalog-query').value='';clearTimeout(timer);renderSidebar();}if(e.key==='Enter'){e.preventDefault();const first=$('chat-list').querySelector('.chat-row');if(first&&!S.sidebarRendering)safeRun(()=>openChat(first.dataset.id))();}};
+  $('catalog-query').oninput=()=>{query=$('catalog-query').value;cancelAnimationFrame(timer);timer=requestAnimationFrame(()=>{timer=0;renderSidebar();});};
+  $('catalog-query').onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();query='';$('catalog-query').value='';cancelAnimationFrame(timer);timer=0;renderSidebar();}if(e.key==='Enter'){e.preventDefault();if(query.trim()){const hit=CatalogModel.lookup(filter(S.chats),query,{limit:1,title:displayTitle,kind,type:S.type,typos:false})[0];if(hit){safeRun(()=>openChat(hit.cid))();return;}}const first=$('chat-list').querySelector('.chat-row');if(first&&!S.sidebarRendering&&filter(S.chats).some(c=>c.id===first.dataset.id))safeRun(()=>openChat(first.dataset.id))();}};
   $('catalog-clear').onclick=clear;$('catalog-filter-open').onclick=()=>{sync();modal('catalog-filter-dialog');};$('catalog-filter-reset').onclick=()=>{clear();$('catalog-filter-dialog').close();};
   $('catalog-filter-form').onsubmit=safeRun(async e=>{e.preventDefault();if(!validRange())return;const values={};for(const [key,id] of Object.entries(filterIDs)){const node=$(id);values[key]=node.type==='checkbox'?node.checked:node.value;}S.settings.catalogFilters=values;document.body.classList.toggle('catalog-dates',$('catalog-dates').checked);S.settings.sidebarDates=$('catalog-dates').checked;$('catalog-filter-dialog').close();renderSidebar();await api('/api/settings',{catalogFilters:values,sidebarDates:S.settings.sidebarDates});});
   $('catalog-from').onchange=validRange;$('catalog-to').onchange=validRange;
