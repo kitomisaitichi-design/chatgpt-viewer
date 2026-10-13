@@ -1,0 +1,18 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict'),context={window:{},Set,Map,WeakMap};vm.createContext(context);
+for(const file of ['selection-model.js','catalog-model.js'])vm.runInContext(fs.readFileSync('web/'+file,'utf8'),context);
+const model=context.window.ConversationSelectionModel,catalog=context.window.CatalogModel,order=['a','b','c','d'],ids=s=>[...s].sort();
+let state=model.click(new Set(),null,order,'b',{ctrl:true});assert.deepEqual(ids(state.selected),['b']);
+state=model.click(state.selected,state.anchor,order,'d',{shift:true});assert.deepEqual(ids(state.selected),['b','c','d']);assert.equal(state.anchor,'b');
+state=model.click(state.selected,state.anchor,order,'a',{ctrl:true});assert.deepEqual(ids(state.selected),order);
+state=model.click(state.selected,state.anchor,order,'b',{ctrl:true});assert.deepEqual(ids(state.selected),['a','c','d']);
+state=model.click(new Set(['d']),'b',order,'a',{ctrl:true,shift:true});assert.deepEqual(ids(state.selected),['a','b','d']);
+state=model.click(new Set(['d']),'missing',order,'a',{shift:true});assert.deepEqual(ids(state.selected),['a','d']);
+assert.deepEqual(ids(model.invert(new Set(['b','hidden']),order)),['a','c','d']);assert.equal(model.invert(new Set(['hidden']),[]).size,0);
+assert.equal(model.click(new Set(['b']),'b',order,'a').selected.size,0);
+assert.equal(model.click(new Set(['b']),'b',order,'missing',{shift:true}).anchor,'b');
+assert.deepEqual(ids(model.click(new Set(),null,['d','c','b','a'],'c',{toggle:true}).selected),['c']);
+const chats=[{id:'parent',kind:'codex',title:'subagent rollout',is_subagent:false},{id:'child',kind:'codex',title:'Build',is_subagent:true},{id:'chat',kind:'chat',title:'Chat',is_subagent:true}];
+assert.deepEqual(Array.from(catalog.filter(chats,{hideSubagents:true}),c=>c.id),['parent','chat']);assert.equal(catalog.filter(chats).length,3);
+assert.equal(catalog.filter(chats,{hideSubagents:true,query:'build'}).length,0);assert.equal(catalog.isSubagent({kind:'codex',is_subagent:'true'}),false);
+console.log('Selection checks passed: toggle, range, additive/reverse range, stale anchor, visible inversion, empty scope, plain opening and metadata-based agent filtering.');

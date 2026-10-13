@@ -36,6 +36,7 @@ jobs:
           node tests/check_documents.js
           node tests/check_rendering.js
           node tests/check_catalog.js
+          node tests/check_selection.js
           node tests/check_thread_images.js
           node tests/check_attachments.js
           node tests/check_document_search.js

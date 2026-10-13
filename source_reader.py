@@ -14,7 +14,7 @@ class IndexedRows(list):
         self.visible_sequences=[m['seq'] for m in self.visible]
 
 def native_conversation(text,path):
-    from native_codex import session_header
+    from native_codex import session_header, conversation_metadata
     session_header(path)
     records=[];lines=text.splitlines(keepends=True)
     for i,line in enumerate(lines):
@@ -26,6 +26,7 @@ def native_conversation(text,path):
             raise
     session=next((r.get('payload') or {} for r in records if isinstance(r,dict) and r.get('type')=='session_meta'),{})
     conv={'id':session.get('id'),'title':session.get('title') or Path(path).stem,'product':'codex','url':'','create_time':session.get('timestamp'),'update_time':Path(path).stat().st_mtime,'messages':[]}
+    conv.update(conversation_metadata(session))
     for r in records:
         if not isinstance(r,dict) or r.get('type')!='response_item':continue
         payload=r.get('payload') or {};role=payload.get('role')

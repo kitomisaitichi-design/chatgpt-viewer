@@ -114,6 +114,13 @@ class ThreadAttachments(ThreadImages):
             if not public['available']:public['candidates']=self.candidates(item)
             filename=str(target or item['path'] or public['name'])
             public['kind']=kind(filename);public['size']=stat.st_size if stat else item['expected'];public['modified']=stat.st_mtime_ns if stat else None;public['mime']=mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+            if not public['available']:
+                from conversation_folders import resolve_folder
+                for reference in item['references']:
+                    try:folder=resolve_folder(self.archive,cid,'reference',reference)
+                    except (OSError,ValueError):continue
+                    public.update(kind='folder',available=True,size=None,folder_reference=reference,folder_path=str(folder),candidates=[])
+                    break
         result['attachments']=result.pop('images');return result
     def file(self,cid,image_id,leaf=None):
         path=self.original(cid,image_id,leaf)

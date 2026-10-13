@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.33'
+VERSION = '1.1.34'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -661,14 +661,23 @@ class Archive:
         with self.connect() as db:
             ready=[dict(dict(r),loaded=True) for r in db.execute("SELECT c.*,COALESCE(o.category,'') category,COALESCE(o.pinned,0) pinned,COALESCE(o.position,0) position,COALESCE(o.alias,'') alias,COALESCE(o.trashed,0) trashed,COALESCE(o.color,'') color,COALESCE(o.sticky,0) sticky,COALESCE(o.bookmarked,0) bookmarked,COALESCE(o.kind_override,'') kind_override FROM chats c LEFT JOIN organization o ON c.id=o.cid")]
             ids={r['id'] for r in ready};organization={r['cid']:dict(r) for r in db.execute('SELECT * FROM organization')}
+            by_id={r['id']:r for r in ready}
+            from native_codex import conversation_metadata
             for r in db.execute('SELECT * FROM manifest_entries WHERE available=1'):
-                if r['cid'] in ids:continue
-                m=json.loads(r['metadata']);ids.add(r['cid'])
+                current=by_id.get(r['cid'])
+                if current and (current['path']!=r['path'] or current['kind']!='codex'):continue
+                m=json.loads(r['metadata'])
+                if r['cid'] in ids:
+                    if by_id[r['cid']]['path']==r['path'] and by_id[r['cid']]['kind']=='codex':by_id[r['cid']].update(conversation_metadata(m))
+                    continue
+                ids.add(r['cid'])
                 ready.append(dict(id=r['cid'],title=m.get('title') or Path(r['path']).stem,url=m.get('url') or ('' if (surface_signal(m) or ('',))[0]=='codex' else 'https://chatgpt.com/c/'+r['cid']),
                     created=epoch(m.get('create_time')),updated=epoch(m.get('update_time')),kind=(surface_signal(m) or (canonical_kind(m.get('chat_kind') or m.get('chatKind')),))[0],kind_evidence=m.get('kind_evidence') or (surface_signal(m) or ('','No saved Work/Codex product marker'))[1],
                     project=m.get('project') if isinstance(m.get('project'),str) else '',path=r['path'],fingerprint='',count=0,folder=str(Path(r['path']).parent),
                     category='',pinned=0,position=0,alias='',trashed=0,color='',sticky=0,bookmarked=0,kind_override='',loaded=False))
                 ready[-1].update({k:organization.get(r['cid'],{}).get(k,ready[-1][k]) for k in ORGANIZATION_FIELDS})
+                if ready[-1]['kind']=='codex':ready[-1].update(conversation_metadata(m))
+                by_id[r['cid']]=ready[-1]
             from remote_state import enrich
             removed={r[0] for r in db.execute('SELECT cid FROM local_removals')}
             return enrich(self,[c for c in ready if c['id'] not in removed])
@@ -713,6 +722,15 @@ class Archive:
                 record(self,manifest.parent,cid,str(scope),'deleted','verified exporter index',checked=stamp if isinstance(stamp,(float,int)) else None)
         if available and not self.live_sources.get(cid,{}).get('loaded'):
             self.live_sources[cid]=dict(id=cid,title=entry.get('title') or Path(path).stem,url=entry.get('url') or ('' if signal and signal[0]=='codex' else 'https://chatgpt.com/c/'+cid),created=epoch(entry.get('create_time')),updated=epoch(entry.get('update_time')),kind=signal[0] if signal else 'chat',kind_evidence=signal[1] if signal else 'No saved Work/Codex product marker',project=entry.get('project') if isinstance(entry.get('project'),str) else '',path=path,fingerprint='',count=0,folder=str(Path(path).parent.relative_to(root)),loaded=False)
+        if available and signal and signal[0]=='codex':
+            from native_codex import conversation_metadata
+            fields=conversation_metadata(entry)
+            if cid in self.live_sources and self.live_sources[cid]['path']==path:self.live_sources[cid].update(fields)
+            if self.ui_cache is not None:
+                with self.ui_cache_lock:
+                    current=self.ui_cache['chats'].get(cid)
+                    if current and current['path']==path and any(current.get(k)!=v for k,v in fields.items()):
+                        current.update(fields);self.ui_cache['revision']+=1;self.ui_row_revisions[cid]=self.ui_cache['revision']
 
     @staticmethod
     def organization_values(values):
@@ -1711,6 +1729,9 @@ class Handler(BaseHTTPRequestHandler):
                 folder=Path(self.server.deletions.browser.setup()['folder'])
                 if os.name=='nt':os.startfile(str(folder))
                 self.send({'path':str(folder)});return
+            elif self.path=='/api/conversation/open-folder':
+                from conversation_folders import open_conversation_folder
+                self.send(open_conversation_folder(a,d.get('id'),d.get('target','workspace'),d.get('reference','')));return
             elif self.path in ('/api/connection/connect','/api/connection/reconnect'):self.send(self.server.native_connection.connect());return
             elif self.path=='/api/delete-queue/add':self.send(self.server.queue_add(d.get('ids'),d.get('mode','library'),d.get('origins')));return
             elif self.path=='/api/delete-queue/action':self.send(self.server.queue_action(d.get('action'),d.get('ids')));return

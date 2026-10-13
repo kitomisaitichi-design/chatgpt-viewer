@@ -28,7 +28,7 @@ window.NativeFileLinks=(()=>{
     // anchors were previously inert even when the file was indexed.
     reference=anchor.dataset.indexedSource||anchor.textContent.trim();
    }
-   if(!candidates(reference).some(match=>basename(match[0])===basename(reference)))continue;
+   if(!candidates(reference).some(match=>basename(match[0])===basename(reference))){window.ConversationTools?.decorateFolder(anchor,reference);continue;}
    anchor.classList.add('native-file-link');anchor.title='Preview the saved file in this viewer';
    anchor.dataset.parsedSource=reference;
    if(!anchor.hasAttribute('href'))anchor.href='#';

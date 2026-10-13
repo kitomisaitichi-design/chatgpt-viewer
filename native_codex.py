@@ -24,6 +24,18 @@ def session_header(path):
         raise ValueError('Session has no Codex producer metadata')
     return value
 
+def conversation_metadata(value):
+    """Retain producer metadata; titles and fork parent IDs are not agent evidence."""
+    source=value.get('source')
+    agent=source.get('subagent') if isinstance(source,dict) else None
+    spawn=agent.get('thread_spawn',{}) if isinstance(agent,dict) else {}
+    if not isinstance(spawn,dict):spawn={}
+    def text(item):return item if isinstance(item,str) else ''
+    return dict(workspace=text(value.get('cwd') or value.get('workspace')),
+                is_subagent=value.get('is_subagent') is True or isinstance(source,dict) and 'subagent' in source or isinstance(source,str) and source.lower().startswith('subagent'),
+                parent_id=text(value.get('parent_thread_id') or value.get('parent_id') or spawn.get('parent_thread_id')),
+                agent_nickname=text(value.get('agent_nickname') or spawn.get('agent_nickname')))
+
 def local_references(raw):
     refs=set()
     for message in raw.get('messages',[]):
@@ -90,6 +102,7 @@ class NativeCodex:
                                 # A state row must point at this exact session before its title is trusted.
                                 if title and Path(title[1]).resolve()==path.resolve():metadata['title']=title[0]
                                 entry=dict(id=cid,title=metadata.get('title') or path.stem,url='',json=str(path.relative_to(root)),chat_kind='codex',create_time=metadata.get('timestamp'),update_time=path.stat().st_mtime)
+                                entry.update(conversation_metadata(metadata))
                                 with self.session_lock:
                                     with a.lock:
                                         current=a.settings().get('nativeCodexExcludedSessions',[])

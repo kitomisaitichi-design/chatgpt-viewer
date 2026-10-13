@@ -1,0 +1,13 @@
+.conversation-selection{padding:6px 12px 8px;border-bottom:1px solid var(--border);flex-shrink:0}
+.selection-tools,.selection-actions{display:flex;align-items:center;flex-wrap:wrap;gap:5px}
+.conversation-selection button,.conversation-folder-actions button{font-size:11px;padding:5px 7px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text)}
+.selection-hide{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--muted)}
+.selection-hide input{accent-color:var(--accent)}
+.selection-actions{margin-top:6px}.selection-actions[hidden]{display:none}
+#selection-count{flex-basis:100%;font-size:12px;font-weight:600}
+.selection-hint{display:block;margin-top:5px;font-size:10px;color:var(--muted)}
+.chat-row.bulk-selected{box-shadow:inset 3px 0 var(--accent);background:color-mix(in srgb,var(--accent) 18%,var(--side))}
+.chat-row.bulk-selected>.row-menu{color:var(--accent)}
+.conversation-folder-actions{display:inline-flex;flex-wrap:wrap;gap:4px}
+#selection-delete{color:#f38b8b}#selection-start[aria-pressed=true]{border-color:var(--accent)}
+.attachment-card.folder-card .attachment-card-status{color:var(--accent)}
