@@ -1,0 +1,15 @@
+/* Visually combine consecutive commentary updates while retaining per-message fold/copy/link. */
+#messages>.message.commentary-first,#messages>.message.commentary-middle,#messages>.message.commentary-last{margin-bottom:0;background:color-mix(in srgb,var(--panel) 28%,transparent);padding:10px 18px 3px;border-left:2px solid color-mix(in srgb,var(--accent) 40%,transparent);content-visibility:visible}
+#messages>.message.commentary-first{margin-top:13px;border-radius:12px 12px 0 0;padding-top:13px}
+#messages>.message.commentary-middle{border-radius:0}
+#messages>.message.commentary-last{border-radius:0 0 12px 12px;padding-bottom:11px;margin-bottom:30px}
+#messages>.message.commentary-middle::before,#messages>.message.commentary-last::before{content:"";display:block;border-top:1px solid color-mix(in srgb,var(--border) 60%,transparent);margin:0 2px 11px}
+#messages>.message.commentary-first>.message-fold>.message-summary>.message-label{color:var(--text);margin-bottom:6px}
+#messages>.message.commentary-middle>.message-fold>.message-summary>.message-label,#messages>.message.commentary-last>.message-fold>.message-summary>.message-label{display:none}
+#messages>.message .commentary-count{display:inline-block;font-size:10px;font-weight:500;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);border-radius:99px;padding:0 8px;letter-spacing:0}
+#messages>.message .commentary-step{font-size:10px;color:var(--muted);letter-spacing:.02em}
+#messages>.message.commentary-first .message-body,#messages>.message.commentary-middle .message-body,#messages>.message.commentary-last .message-body{font-size:.91em;line-height:1.58}
+#messages>.message.commentary-first .message-body p,#messages>.message.commentary-middle .message-body p,#messages>.message.commentary-last .message-body p{margin-bottom:.58em}
+#messages>.message.commentary-first>.message-tools,#messages>.message.commentary-middle>.message-tools,#messages>.message.commentary-last>.message-tools{min-height:14px;margin-top:3px}
+#messages>.message .model-badge[hidden]{display:none!important}
+@media(max-width:620px){#messages>.message.commentary-first,#messages>.message.commentary-middle,#messages>.message.commentary-last{padding-left:11px;padding-right:10px}}

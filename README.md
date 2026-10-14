@@ -16,7 +16,7 @@
 
 Read, search and organize saved **ChatGPT, ChatGPT Work and Codex** conversations in a familiar local interface. Explore branches, documents, images and media; keep your place; organize your archive; and back it up without sending your chats to a hosted reader.
 
-**Latest update — v1.1.38:** A top-right **All tables** control lets you switch every conversation table between Clean, Fit, Wide, Compact, Sleek and Expanded views, or expand/collapse them all. Saved source references now check original message metadata and offer a direct **Open original in ChatGPT** link when the export lacks the article URL. [Read the v1.1.38 changes](release-notes/v1.1.38.md) · [Selection and folders](docs/SELECTION-AND-FOLDERS.md).
+**Latest update — v1.1.39:** A tiny **iPhone-style message scrubber** appears at the right edge: horizontal black-and-white dashes animate with scrolling, reveal a translucent message preview on hover, and jump to any part of the thread when clicked or dragged—even older messages that have not loaded yet. Contiguous assistant commentary now reads as one grouped update series with nonrepeating model labels. [Read the v1.1.39 changes](release-notes/v1.1.39.md) · [Interface gallery](docs/SHOWCASE.md).
 
 The Windows download includes **Python and offline rendering assets**. Standard reading needs no installer, subscription, API key, CDN or package setup. Optional online features remain under your control.
 

@@ -1,0 +1,19 @@
+/* Compact iOS-style scrubber: horizontal white/black dashes stacked vertically. */
+#conversation-timeline{position:absolute;z-index:13;right:3px;top:50%;bottom:auto;transform:translateY(-50%);height:125px;width:18px;display:block;padding:5px 3px;cursor:ns-resize;opacity:.12;transition:opacity .18s ease;outline-offset:2px;touch-action:none}
+#conversation-timeline[hidden]{display:none!important}
+#conversation-timeline.timeline-has-room{right:13px;opacity:.58}
+/* Remove the redundant browser scrollbar only where the scrubber has room. */
+#main.timeline-wide #scroller{scrollbar-width:none}
+#main.timeline-wide #scroller::-webkit-scrollbar{display:none}
+#conversation-timeline.timeline-scrolling{opacity:.82}
+#conversation-timeline:hover,#conversation-timeline:focus-visible,#conversation-timeline.previewing,#conversation-timeline.timeline-dragging{opacity:1}
+.timeline-track{height:100%;width:100%;border-radius:5px;background:color-mix(in srgb,#000 65%,transparent);position:relative}
+.timeline-notch{pointer-events:none;position:absolute;left:1px;width:10px;height:2px;background:#fff;border-radius:2px;transform-origin:center;transition:opacity .13s ease,transform .13s ease;will-change:opacity,transform}
+.timeline-preview{display:none;position:absolute;right:calc(100% + 8px);width:min(246px,calc(100vw - 55px));min-height:58px;max-height:121px;overflow:hidden;padding:9px 11px;background:color-mix(in srgb,var(--side) 88%,transparent);border:1px solid color-mix(in srgb,var(--text) 12%,transparent);border-radius:11px;box-shadow:0 7px 24px #0004;backdrop-filter:blur(15px);-webkit-backdrop-filter:blur(15px);pointer-events:none}
+#conversation-timeline.previewing .timeline-preview,#conversation-timeline:focus-visible .timeline-preview{display:block}
+.timeline-preview-role{display:block;color:var(--muted);font-size:10px;font-weight:600;margin-bottom:4px}
+.timeline-preview-text{color:var(--text);font-size:11px;line-height:1.38;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;margin:0 0 5px}
+.timeline-preview-position{color:var(--muted);font-size:9px;font-variant-numeric:tabular-nums}
+@media(max-width:720px){#conversation-timeline{right:1px;width:15px;opacity:.07}.timeline-preview{width:min(218px,calc(100vw - 38px))}}
+@media(hover:none){#conversation-timeline:not(.timeline-scrolling):not(.timeline-dragging):not(:focus-visible){opacity:0}}
+@media(prefers-reduced-motion:reduce){#conversation-timeline,.timeline-notch{transition:none}}

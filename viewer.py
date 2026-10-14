@@ -15,7 +15,7 @@ APP = Path(__file__).resolve().parent
 # Embedded Windows Python ignores PYTHONPATH; activate the app-local packages explicitly.
 from setup_semantic import activate as activate_semantic
 activate_semantic()
-VERSION = '1.1.38'
+VERSION = '1.1.39'
 from preferences import FIELDS as ORGANIZATION_FIELDS
 UUID = re.compile(r'[a-zA-Z0-9_-]{8,160}')
 from discovery import SKIP,SKIP_LOWER,scan_boundary,iter_documents
@@ -961,6 +961,23 @@ class Archive:
             last=rows[-1]['seq'] if rows else -1
             newer=db.execute('SELECT count(*) FROM messages WHERE cid=?'+predicate+' AND seq>?',(cid,last)).fetchone()[0]
             return {'messages':[presented_message(dict(dict(r),extras=json.loads(r['extras'] or '{}'))) for r in rows],'total':total,'older':older,'newer':newer,'first':first}
+    def timeline(self,cid,leaf=None,details=False):
+        from conversation_timeline import build_timeline
+        if leaf:
+            _,path=self.source_data(cid)
+            if not path:raise ValueError('Saved conversation branch was not found.')
+            rows=self.source_reader.rows(cid,path,leaf)
+            return build_timeline(rows if details else rows.visible)
+        predicate='' if details else ' AND visible=1'
+        with self.connect() as db:
+            known=db.execute('SELECT id FROM chats WHERE id=?',(cid,)).fetchone()
+            if known:
+                rows=db.execute('SELECT seq,role,channel,time,substr(text,1,440) AS text FROM messages WHERE cid=?'+predicate+' ORDER BY seq',(cid,)).fetchall()
+                return build_timeline(rows)
+        _,path=self.source_data(cid)
+        if not path:raise ValueError('Saved conversation was not found.')
+        rows=self.source_reader.rows(cid,path)
+        return build_timeline(rows if details else rows.visible)
     def source_data(self,cid):
         if self.ui_cache is not None and cid in self.ui_cache['chats']:r={'path':self.ui_cache['chats'][cid]['path']}
         else:
@@ -1616,6 +1633,9 @@ class Handler(BaseHTTPRequestHandler):
                 args=(q['id'],q.get('before'),q.get('around'),q.get('limit',100),q.get('details')=='1',q.get('after'))
                 with a.foreground_read():page=a.branch_page(args[0],q['leaf'],*args[1:]) if q.get('leaf') else a.foreground_page(*args)
                 self.send(bounded_message_page(page,q.get('bytes',32768),q.get('around'),q.get('after') is not None));return
+            if url.path=='/api/timeline':
+                with a.foreground_read():self.send(a.timeline(q['id'],q.get('leaf'),q.get('details')=='1'))
+                return
             if url.path=='/api/search':
                 scope=None
                 if q.get('include_trash')!='1':
