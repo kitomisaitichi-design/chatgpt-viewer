@@ -7,10 +7,9 @@ window.ConversationTimeline=(()=>{
  function paintNotches(progress){
   const focus=Math.max(0,Math.min(1,progress))*(NOTCHES-1);
   for(let i=0;i<notches.length;i++){
-   const distance=Math.abs(i-focus),strength=Math.exp(-distance*distance/5);
+   const distance=Math.abs(i-focus),strength=Math.exp(-distance*distance/7);
    const notch=notches[i];
-   notch.style.opacity=String(.38+.62*strength);
-   notch.style.transform='scaleX('+(0.65+.35*strength)+')';
+   notch.style.opacity=String(.17+.76*strength);
   }
  }
  function continuousProgress(){

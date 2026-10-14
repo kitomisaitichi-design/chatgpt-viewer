@@ -48,6 +48,7 @@ jobs:
           node tests/check_browser_pacing.mjs
           node tests/check_structured_content.js
           node tests/check_table_preferences.js
+          node tests/check_scrubber_style.js
       - name: Build and publish ZIP and checksum
         env:
           GH_TOKEN: ${{ github.token }}

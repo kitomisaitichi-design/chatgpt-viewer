@@ -1,0 +1,25 @@
+'use strict';
+const fs=require('node:fs');
+const assert=require('node:assert/strict');
+const css=fs.readFileSync('web/conversation-timeline.css','utf8');
+const js=fs.readFileSync('web/conversation-timeline.js','utf8');
+const rules=name=>{
+ const escaped=name.replace(/[.*+?^$\{\}()|[\]\\]/g,'\\$&');
+ const match=css.match(new RegExp('(?:^|\\n)'+escaped+'\\s*\\{([^}]*)\\}'));
+ assert(match,'Missing '+name);
+ return match[1];
+};
+const track=rules('.timeline-track');
+const notch=rules('.timeline-notch');
+const rail=rules('#conversation-timeline');
+assert.match(track,/background:\s*transparent/);
+assert.match(track,/border:\s*0/);
+assert.match(rail,/background:\s*transparent/);
+assert.match(rail,/border:\s*0/);
+assert.match(notch,/height:\s*1px/);
+assert.match(notch,/transition:\s*opacity/);
+assert.doesNotMatch(notch,/scaleX\(/);
+assert.doesNotMatch(css,/\.timeline-playhead/);
+assert.match(js,/NOTCHES=19/);
+assert.match(js,/paintNotches\(continuousProgress\(\)\)/);
+console.log('Scrubber fidelity verified: no black capsule, 1px hairlines, 19 animated dashes.');
