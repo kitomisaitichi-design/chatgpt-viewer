@@ -1,0 +1,32 @@
+#table-layout-open{display:inline-flex;align-items:center;justify-content:center;min-width:34px}
+#table-layout-open .viewer-icon{width:18px;height:18px}
+#table-layout-open[aria-expanded=true]{background:var(--panel);color:var(--accent)}
+#table-layout-menu{position:fixed;z-index:55;width:min(316px,calc(100vw - 16px));max-height:min(78dvh,560px);overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:13px;padding:10px;box-shadow:0 18px 60px #0008}
+#table-layout-menu[hidden]{display:none!important}
+.table-menu-heading{font-weight:600;font-size:13px;padding:6px 7px 9px}
+.table-menu-styles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+.table-menu-styles button{display:flex;flex-direction:column;text-align:left;gap:4px;font-size:12px;padding:9px;border-radius:8px;border:1px solid transparent;background:var(--side)}
+.table-menu-styles button small{font-size:10px;color:var(--muted);line-height:1.4}
+.table-menu-styles button[aria-checked=true]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--side))}
+.table-menu-actions{display:flex;gap:6px;border-top:1px solid var(--border);padding-top:9px;margin-top:10px}
+.table-menu-actions button{flex:1;font-size:11px;padding:7px 5px;border:1px solid var(--border)}
+/* Borderless ChatGPT-inspired global layouts. Scope to conversation tables, not saved file viewers. */
+#main.table-global-clean .table-card,#main.table-global-sleek .table-card,#main.table-global-fit .table-card,#main.table-global-expanded .table-card{border:0;border-radius:0;background:transparent}
+#main.table-global-clean .table-card .table-toolbar,#main.table-global-sleek .table-card .table-toolbar,#main.table-global-fit .table-card .table-toolbar,#main.table-global-expanded .table-card .table-toolbar{background:transparent;border-bottom:1px solid var(--border);padding:4px 2px;gap:5px}
+#main.table-global-clean .table-card .table-toolbar button,#main.table-global-sleek .table-card .table-toolbar button{padding:3px 6px}
+#main.table-global-clean .table-card .table-wrap,#main.table-global-sleek .table-card .table-wrap,#main.table-global-fit .table-card .table-wrap,#main.table-global-expanded .table-card .table-wrap{border:0}
+#main.table-global-clean .table-card th,#main.table-global-clean .table-card td,#main.table-global-fit .table-card th,#main.table-global-fit .table-card td{padding:8px 11px;border-bottom:1px solid var(--border)}
+#main.table-global-sleek .table-card th,#main.table-global-sleek .table-card td{padding:9px 12px;border-bottom:1px solid color-mix(in srgb,var(--border) 65%,transparent)}
+#main.table-global-sleek .table-card .table-toolbar .table-size{display:none}
+#main.table-global-sleek .table-card .table-toolbar{opacity:.35;transition:opacity .13s ease}
+#main.table-global-sleek .table-card:hover .table-toolbar,#main.table-global-sleek .table-card:focus-within .table-toolbar{opacity:1}
+#main.table-global-compact .table-card .table-toolbar{padding:4px 6px}
+#main.table-global-compact .table-card th,#main.table-global-compact .table-card td{padding:5px 8px;font-size:.86em;line-height:1.4}
+#main.table-global-wide .table-card table{table-layout:auto;min-width:var(--table-min-width,480px)}
+#main.table-global-expanded #conversation{max-width:calc(100% - 24px)!important;width:100%}
+#main.table-global-expanded .table-card table{width:100%;min-width:0;table-layout:auto}
+#main.table-global-fit .table-card table{width:100%;min-width:0;table-layout:fixed}
+@media(max-width:600px){#table-layout-open{min-width:29px}.table-menu-styles button{padding:7px}}
+.source-recovery-actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.source-recovery-actions .source-link{padding:8px 11px}
+.source-recovery-actions button.source-link{cursor:pointer}
