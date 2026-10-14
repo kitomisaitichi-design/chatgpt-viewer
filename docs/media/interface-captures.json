@@ -78,5 +78,35 @@
     "bytes": 408919,
     "sha256": "36d086b80c6b8d77822ed34cc8d77a1ec2d09bb4ea2ab816b7b902f357f9beb4",
     "capture": "Actual Offline Chat Viewer 1.1.28 UI; synthetic demonstration archive; caption strip added above unchanged capture"
+  },
+  {
+    "file": "interface-table-layouts.gif",
+    "title": "Global table layouts",
+    "width": 1600,
+    "height": 1050,
+    "frames": 4,
+    "bytes": 614374,
+    "sha256": "685e766e5ccf3192d65d31b15772142edaa4ccd61093d963688583ce36714465",
+    "capture": "Actual Offline Chat Viewer 1.1.38 interface; isolated synthetic demo archive; chronological UI states captioned; no personal chats"
+  },
+  {
+    "file": "interface-sidebar-density.gif",
+    "title": "Adaptive sidebar",
+    "width": 1600,
+    "height": 1050,
+    "frames": 4,
+    "bytes": 598524,
+    "sha256": "95ac639937508d8dacbabc164c56d533b7902d6c84264e6003722ed175657e60",
+    "capture": "Actual Offline Chat Viewer 1.1.38 interface; isolated synthetic demo archive; chronological UI states captioned; no personal chats"
+  },
+  {
+    "file": "interface-source-links.gif",
+    "title": "Original source links",
+    "width": 1600,
+    "height": 1050,
+    "frames": 2,
+    "bytes": 185805,
+    "sha256": "4736c26edefb0aa24e2d5e1e826e09b05c173cff6aac08bedd81a68a1afb3c5a",
+    "capture": "Actual Offline Chat Viewer 1.1.38 interface; isolated synthetic demo archive; chronological UI states captioned; no personal chats"
   }
 ]

@@ -22,11 +22,11 @@ The Windows download includes **Python and offline rendering assets**. Standard 
 
 ## See the Viewer in action
 
-![Actual Viewer reading interface](docs/media/interface-reading.gif)
+![Live table layout controls: clean, compact, expanded](docs/media/interface-table-layouts.gif)
 
-**Real interface, real controls.** These short walkthroughs use a separate demonstration archive. Each GIF is 1600 pixels wide; open it for full resolution. Captions explain the recorded steps, and no personal chat data is shown.
+**Real interface, real controls.** The newest walkthroughs show v1.1.38 table layouts, saved citations, and the adaptive sidebar using an isolated synthetic archive. Eight earlier demos remain labeled v1.1.28 in the [full gallery](docs/SHOWCASE.md). The GIFs are 1600 pixels wide; no personal chat data is shown.
 
-**[Browse all eight interface demos](docs/SHOWCASE.md)** · [Search](#find-what-matters) · [Organization](#a-sidebar-that-fits-your-archive) · [Documents and media](#documents-images-and-rich-media) · [Themes](#make-it-comfortable) · [Backups](#backups-and-portability)
+**[Browse all eleven interface demos](docs/SHOWCASE.md)** · [Search](#find-what-matters) · [Organization](#a-sidebar-that-fits-your-archive) · [Documents and media](#documents-images-and-rich-media) · [Themes](#make-it-comfortable) · [Backups](#backups-and-portability)
 
 <details>
 <summary>Illustrated overview and release settings</summary>
@@ -54,12 +54,17 @@ Keep `.viewer-data` when updating in place. Shared preferences live separately u
 
 ### Read the whole conversation
 
+![Saved source URLs and ChatGPT original-conversation fallback](docs/media/interface-source-links.gif)
+
+*Saved article URLs open directly. Reference IDs without article URLs offer the original ChatGPT conversation when its link survived the export. The shown conversation is a synthetic demo.*
+
 - Import ChatGPT Exporter folders, official ChatGPT exports, readable Markdown/JSON conversations and supported explicit-role Codex session JSONL.
 - Distinguish **Chats**, **Work** and **Codex** using saved source evidence; apply explicit type corrections where needed.
 - Browse saved branches and message versions, model metadata, timestamps and source links.
 - Render Markdown, headings, lists, code with copying/highlighting, formulas, tables, citations and supported saved charts/widgets.
 - Recreate saved ChatGPT structured content: Mermaid-style flowcharts in all four directions, Chart data and series, grid/row/card layouts, compact metric labels, small captions, and grouped downloadable-document links. Expand graphs with Fit/zoom and charts in top-layer dialogs.
-- Preserve table link labels and source citations from supported structured OpenAI markup; open saved source URLs and inspect multi-source details.
+- Choose **Clean, Fit, Wide, Compact, Sleek, or Expanded** once for all conversation tables; expand/collapse every table together while preserving per-table controls.
+- Preserve table link labels and source citations from supported structured OpenAI markup; open saved source URLs, inspect multi-source details, and return to the original ChatGPT conversation when exported references lack article URLs.
 - Keep literal code examples intact rather than interpreting them as rich content.
 - Load messages in bounded pages, preserve reading positions and reuse recently opened conversation content.
 - Jump to the top or bottom, navigate search results, copy conversation text and download source data.
@@ -79,12 +84,17 @@ Keep `.viewer-data` when updating in place. Shared preferences live separately u
 
 ### A sidebar that fits your archive
 
+![Resize the sidebar UI and reveal controls only as needed](docs/media/interface-sidebar-density.gif)
+
+*Normal, Small, Auto and temporary More controls — captured in v1.1.38 on a separate demo archive.*
+
 ![Customize organization and pin conversations](docs/media/interface-organization.gif)
 
 *Arrange sections, adjust density, hide empty groups and keep useful conversations pinned.*
 
 - Organized sections for pins, bookmarks, native ChatGPT projects, local folders/categories, Chats, Work and Codex.
 - Keep native project membership separate from local organization and disk source folders.
+- Scale the sidebar UI from **70% to 115%**, or use **Auto** to follow window height. A five-icon dock keeps Bookmarks, Trash, size, Settings and More close without permanently crowding the chat list.
 - Set section priorities, visibility, nesting, initial row counts, collapsed folders, compact rows, dates and count display.
 - Sort by title, created/updated time or manual order; use per-folder sorting and drag/reorder controls where supported.
 - Rename display aliases, add colors, pin/bookmark chats, keep sticky chats, and filter by type, dates, title, folder or untitled state.
