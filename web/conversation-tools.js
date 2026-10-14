@@ -24,8 +24,9 @@ window.ConversationTools=(()=>{
  function update(){
   if(!bar)return;const ids=visible(),visibleSet=new Set(ids),hidden=[...selected].filter(id=>!visibleSet.has(id)).length;
   $('selection-count').textContent=selected.size+' selected'+(hidden?' · '+hidden+' hidden':'');
-  $('selection-start').textContent=selecting?'Done selecting':'Select chats';$('selection-start').setAttribute('aria-pressed',String(selecting));
-  toggle.textContent=(selected.size?selected.size+' selected · ':'')+'Tools ▾';
+  $('selection-start').setAttribute('aria-label',selecting?'Finish selecting chats':'Select multiple chats');$('selection-start').title=$('selection-start').getAttribute('aria-label');$('selection-start').setAttribute('aria-pressed',String(selecting));
+  $('selection-inline-count').textContent=selected.size?selected.size+' selected':'';
+  toggle.setAttribute('aria-label',(selected.size?selected.size+' selected · ':'')+'Selection tools');toggle.title=toggle.getAttribute('aria-label');
   bar.classList.toggle('has-selection',!!selected.size);
   for(const id of ['selection-all','selection-invert'])$(id).disabled=!ids.length||S.sidebarRendering;
   $('selection-backup').disabled=!selected.size; $('selection-clear').disabled=!selected.size;$('selection-delete').disabled=!selected.size||staging;
@@ -55,8 +56,11 @@ window.ConversationTools=(()=>{
  function bind(){
   bar=el('section','conversation-selection');bar.setAttribute('aria-label','Conversation selection');
   const main=el('div','selection-inline');
-  main.append(button('selection-start','Select chats',()=>{selecting=!selecting;update();}),button('selection-toggle','Tools ▾',()=>setOpen(panel.hidden,true)));
-  toggle=main.lastChild;toggle.setAttribute('aria-controls','selection-actions');toggle.setAttribute('aria-expanded','false');toggle.title='Open draggable selection tools, subagents, backup and deletion';
+  main.append(button('selection-start','',()=>{selecting=!selecting;update();}),el('span','selection-inline-count'),button('selection-toggle','',()=>setOpen(panel.hidden,true)));
+  ViewerIcons.set(main.firstChild,'check');ViewerIcons.set(main.lastChild,'sliders');
+  main.firstChild.setAttribute('aria-label','Select multiple chats');main.firstChild.title='Select multiple chats';
+  main.children[1].id='selection-inline-count';main.children[1].setAttribute('role','status');
+  toggle=main.lastChild;toggle.setAttribute('aria-controls','selection-actions');toggle.setAttribute('aria-expanded','false');toggle.title='Selection tools';
   bar.append(main);$('chat-list').before(bar);
   panel=el('section','selection-actions selection-panel');panel.id='selection-actions';panel.hidden=true;panel.tabIndex=-1;panel.setAttribute('role','dialog');panel.setAttribute('aria-label','Conversation selection tools');
   const handle=el('div','selection-panel-head');handle.id='selection-panel-handle';handle.title='Drag to move this panel';

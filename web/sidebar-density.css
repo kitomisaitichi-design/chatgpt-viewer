@@ -1,0 +1,40 @@
+/* Controls occupy one icon row; secondary utilities reveal above it only on demand. */
+#sidebar{--sidebar-ui-scale:0.85}
+#sidebar > :not(#sidebar-resize){zoom:var(--sidebar-ui-scale,0.85)}
+#sidebar > .chat-list{min-height:0;flex:1 1 auto}
+#sidebar .sidebar-bottom{position:relative;flex:0 0 auto;padding:5px 0 8px;border-top:1px solid var(--border)}
+#sidebar-icon-dock{display:flex;align-items:center;justify-content:space-between;gap:4px;min-height:34px}
+#sidebar .sidebar-dock-button{display:flex;align-items:center;justify-content:center;flex:1 1 0;position:relative;min-width:0;height:34px;margin:0;padding:6px;border:1px solid transparent;border-radius:9px;color:var(--muted);background:transparent}
+#sidebar .sidebar-dock-button:hover,#sidebar .sidebar-dock-button:focus-visible,#sidebar .sidebar-dock-button[aria-expanded=true]{background:var(--panel);color:var(--text);border-color:var(--border)}
+#sidebar .sidebar-dock-button .viewer-icon{width:17px;height:17px}
+#sidebar .sidebar-dock-button small{position:absolute;right:0;top:-2px;min-width:14px;font-size:9px;line-height:14px;text-align:center;color:var(--muted);background:var(--side);border-radius:7px}
+#sidebar-utility-panel{position:absolute;bottom:calc(100% + 6px);left:0;right:0;z-index:20;background:var(--bg);border:1px solid var(--border);border-radius:11px;padding:11px;box-shadow:0 12px 30px #0008;max-height:min(50dvh,360px);overflow:auto}
+#sidebar-utility-panel[hidden],#sidebar-utility-panel>div[hidden]{display:none!important}
+#sidebar-utility-panel .sidebar-utility-title{display:flex;justify-content:space-between;font-size:12px;font-weight:600;gap:6px}
+#sidebar-scale-value{font-size:12px;color:var(--accent);font-variant-numeric:tabular-nums}
+#sidebar-scale{display:block;width:100%;margin:13px 0 12px;padding:0}
+.sidebar-size-presets{display:flex;gap:5px}
+.sidebar-size-presets button{flex:1;padding:6px 2px;font-size:10px;background:var(--panel);border:1px solid var(--border);border-radius:7px}
+#sidebar-more-controls{display:flex;flex-direction:column;gap:5px}
+#sidebar-more-controls #status{white-space:normal;font-size:11px;line-height:1.4;padding:5px}
+#sidebar-more-controls #scan-toggle{font-size:11px;min-height:29px;border:1px solid var(--border);border-radius:8px;text-align:left;padding:6px}
+#sidebar-more-controls .catalog-footer{padding:4px 0;border:0;gap:3px}
+#sidebar-more-controls .profile{margin:3px 0 0;padding:5px 0 0}
+#sidebar-more-controls .profile .avatar{width:24px;height:24px}
+#sidebar-more-controls #delete-queue-open[hidden]{display:none}
+/* Responsive action surface: symbols first, full labels remain as accessible names and tooltips. */
+#sidebar .conversation-selection{padding:3px 2px 5px}
+#sidebar .selection-inline{gap:5px}
+#sidebar .selection-inline button{min-height:29px;height:29px;flex:0 0 33px;padding:4px;display:flex;align-items:center;justify-content:center}
+#sidebar .selection-inline button .viewer-icon{width:17px;height:17px}
+#sidebar .selection-inline-count{flex:1;min-width:0;font-size:11px;color:var(--accent);font-weight:600;font-variant-numeric:tabular-nums;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#sidebar .selection-inline button[aria-pressed=true]{color:var(--accent);border-color:var(--accent)}
+.selection-panel{width:min(295px,calc(100vw - 24px));min-height:0;max-height:min(70dvh,430px);padding:0 10px 9px}
+.selection-panel-head{margin:0 -10px 7px;padding:8px 10px}
+.selection-panel-label{margin:7px 0 5px}
+.selection-panel .selection-scope{gap:4px}
+.selection-panel .selection-scope button{min-height:28px;padding:5px 3px}
+.selection-panel .selection-agent-controls{margin-top:6px}
+.selection-panel .selection-primary-actions button{min-height:31px;padding:6px 5px}
+.selection-panel .selection-hint{display:none}
+@media (prefers-reduced-motion:reduce){#sidebar-utility-panel{transition:none}}

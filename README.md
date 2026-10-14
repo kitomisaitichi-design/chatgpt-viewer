@@ -16,7 +16,7 @@
 
 Read, search and organize saved **ChatGPT, ChatGPT Work and Codex** conversations in a familiar local interface. Explore branches, documents, images and media; keep your place; organize your archive; and back it up without sending your chats to a hosted reader.
 
-**Latest update — v1.1.36:** The sidebar selection toolbar now occupies one row. Open **Tools** for a draggable, resizable panel with select-all, inverse, subagent visibility, selected-chat backups and reviewed deletion. Selections remain intact when the panel closes. [Read the v1.1.36 changes](release-notes/v1.1.36.md) · [Backup controls](docs/BACKUP-CONTROLS.md) · [Selection and folders](docs/SELECTION-AND-FOLDERS.md).
+**Latest update — v1.1.37:** An adaptive, scalable sidebar defaults to a compact size; adjust its UI from 70% to 115% with the new bottom sliders icon. Bookmarks, Trash, size, Settings and more are one compact icon dock; scanning, status and secondary options open only on demand. Bulk selection also uses small icon controls with a live count and a separate movable panel. [Read the v1.1.37 changes](release-notes/v1.1.37.md) · [Selection and folders](docs/SELECTION-AND-FOLDERS.md).
 
 The Windows download includes **Python and offline rendering assets**. Standard reading needs no installer, subscription, API key, CDN or package setup. Optional online features remain under your control.
 
